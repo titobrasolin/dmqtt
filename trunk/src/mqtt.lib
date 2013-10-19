@@ -38,26 +38,28 @@ END DESCRIPTION **********************************************************/
 #define MQTT_KEEPALIVE 15
 
 #define MQTTPROTOCOLVERSION 3
-#define MQTTCONNECT 1 << 4 // Client request to connect to Server
-#define MQTTCONNACK 2 << 4 // Connect Acknowledgment
-#define MQTTPUBLISH 3 << 4 // Publish message
-#define MQTTPUBACK 4 << 4 // Publish Acknowledgment
-#define MQTTPUBREC 5 << 4 // Publish Received (assured delivery part 1)
-#define MQTTPUBREL 6 << 4 // Publish Release (assured delivery part 2)
-#define MQTTPUBCOMP 7 << 4 // Publish Complete (assured delivery part 3)
-#define MQTTSUBSCRIBE 8 << 4 // Client Subscribe request
-#define MQTTSUBACK 9 << 4 // Subscribe Acknowledgment
+
+#define MQTTCONNECT      1 << 4 // Client request to connect to Server
+#define MQTTCONNACK      2 << 4 // Connect Acknowledgment
+#define MQTTPUBLISH      3 << 4 // Publish message
+#define MQTTPUBACK       4 << 4 // Publish Acknowledgment
+#define MQTTPUBREC       5 << 4 // Publish Received (assured delivery part 1)
+#define MQTTPUBREL       6 << 4 // Publish Release (assured delivery part 2)
+#define MQTTPUBCOMP      7 << 4 // Publish Complete (assured delivery part 3)
+#define MQTTSUBSCRIBE    8 << 4 // Client Subscribe request
+#define MQTTSUBACK       9 << 4 // Subscribe Acknowledgment
 #define MQTTUNSUBSCRIBE 10 << 4 // Client Unsubscribe request
-#define MQTTUNSUBACK 11 << 4 // Unsubscribe Acknowledgment
-#define MQTTPINGREQ 12 << 4 // PING Request
-#define MQTTPINGRESP 13 << 4 // PING Response
-#define MQTTDISCONNECT 14 << 4 // Client is Disconnecting
-#define MQTTReserved 15 << 4 // Reserved
+#define MQTTUNSUBACK    11 << 4 // Unsubscribe Acknowledgment
+#define MQTTPINGREQ     12 << 4 // PING Request
+#define MQTTPINGRESP    13 << 4 // PING Response
+#define MQTTDISCONNECT  14 << 4 // Client is Disconnecting
+#define MQTTReserved    15 << 4 // Reserved
 
 #define MQTTQOS0 (0 << 1)
 #define MQTTQOS1 (1 << 1)
 #define MQTTQOS2 (2 << 1)
 
+typedef void (*mqttCallback)(far char*, uint8*, unsigned int);
 typedef struct mqttConnection {
    char host[100];
    word port;
@@ -65,25 +67,245 @@ typedef struct mqttConnection {
    char pass[20];
    int state;
    void* socket;
-   void (*onMessage)();
    byte buffer[MQTT_MAX_PACKET_SIZE];
    word nextMsgId;
    longword lastOutActivity;
    longword lastInActivity;
    BOOLEAN pingOutstanding;
-} mqttConnection;
+   mqttCallback callback;
+   } mqttConnection;
 /*** EndHeader */
 
 /*** BeginHeader mqttSetConnectInfo*/
 void mqttSetConnectInfo(mqttConnection *conn, char *host,
-   word port, char *name, char *passcode);
+      word port, char *name, char *pass, mqttCallback callback);
 /*** EndHeader */
 void mqttSetConnectInfo(mqttConnection *conn, char *host,
-   word port, char *name, char *pass) {
-      conn->port=port;
-      strcpy(conn->host, host);
-      strcpy(conn->name, name);
-      strcpy(conn->pass, pass);
+      word port, char *name, char *pass, mqttCallback callback) {
+   conn->callback=callback;
+   conn->port=port;
+   strcpy(conn->host, host);
+   strcpy(conn->name, name);
+   strcpy(conn->pass, pass);
+   }
+
+/*** BeginHeader mqttConnect*/
+void mqttConnect(mqttConnection *conn, void* socket);
+/*** EndHeader */
+void mqttConnect(mqttConnection *conn, void* socket) {
+   int status;
+   longword ip;
+   conn->socket=socket;
+
+   sock_close(socket);
+   while (ifpending(IF_DEFAULT) == IF_COMING_UP) {
+      tcp_tick(NULL);
+   }
+
+   if (isaddr(conn->host)) {
+      ip=inet_addr(conn->host);
+   } else {
+      ip=resolve(conn->host);
+   }
+   tcp_open(conn->socket,0,ip,conn->port,NULL);
+
+   sock_mode(conn->socket,TCP_MODE_BINARY); //TCP_MODE_ASCII);
+   sock_err:
+      switch(status) {
+         case 1: /* foreign host closed */
+            printf("User closed session\n");
+            break;
+         case -1: /* time-out */
+            printf("\nConnection timed out\n");
+            break;
+      }
+}
+
+/*** BeginHeader mqttHandleMessage*/
+void mqttHandleMessage(mqttConnection *conn, char * msg);
+/*** EndHeader */
+void mqttHandleMessage(mqttConnection *conn, char * msg) {
+   char *header;
+   char *rest;
+   char *body;
+   char *dist;
+   if (*msg=='\n')
+      msg++;
+   header=msg;
+   rest=strchr(msg,'\n');
+   if (rest!=NULL) {
+      *rest='\0';
+      rest++;
+      body=strstr(rest,"\n\n");
+      if (body!=NULL) {
+         body+=2;
+         if (strcmp(header,"MESSAGE")==0) {
+            dist=strstr(rest,"destination:");
+            if (dist!=NULL) {
+               rest=strchr(dist,'\n');
+               *rest='\0';
+               (*(conn->onMessage))(dist+strlen("destination:"),body);
+            }
+         }
+      }
+   }
+}
+
+/*** BeginHeader mqttReadPacket*/
+uint16 mqttReadPacket(mqttConnection *conn, char * msg);
+/*** EndHeader */
+/*
+The message header for each MQTT command message contains a fixed header.
+The table below shows the fixed header format.
++--------+---+---+---+---+----------+-----+-----+--------+
+|  bit   | 7 | 6 | 5 | 4 |    3     |  2  |  1  |    0   |
++--------+---+---+---+---+----------+-----+-----+--------+
+| byte 1 |  Message Type | DUP flag | QoS level | RETAIN |
++--------+---------------+----------+-----------+--------+
+| byte 2 |               Remaining Length                |
++--------+-----------------------------------------------+
+
+Byte 1
+   Contains the Message Type and Flags (DUP, QoS level, and RETAIN) fields.
+Byte 2
+   (At least one byte) contains the Remaining Length field.
+
+*/
+uint16 mqttReadPacket(mqttConnection *conn, uint8* lengthLength) {
+   uint16 len, length, i;
+   uint8 digit, multiplier;
+
+   // Byte 1 contains the Message Type and Flags (DUP, QoS level, and RETAIN)
+   // fields.
+   len = 0;
+   conn->buffer[len++] = sock_getc(conn->socket); // NOTE: this function blocks.
+
+   // Byte 2 (at least one byte) contains the Remaining Length field.
+   // The variable length encoding scheme uses a single byte for messages up to
+   // 127 bytes long. Longer messages are handled as follows. Seven bits of each
+   // byte encode the Remaining Length data, and the eighth bit indicates any
+   // following bytes in the representation. Each byte encodes 128 values and a
+   // "continuation bit". For example, the number 64 decimal is encoded as a
+   // single byte, decimal value 64, hex 0x40. The number 321 decimal
+   // (= 65 + 2*128) is encoded as two bytes, least significant first. The first
+   // byte 65+128 = 193. Note that the top bit is set to indicate at least one
+   // following byte. The second byte is 2.
+   digit = 0;
+   length = 0;
+   multiplier = 1;
+   do {
+      digit = sock_getc(conn->socket);
+      conn->buffer[len++] = digit;
+      length += (digit & 127) * multiplier;
+      multiplier *= 128;
+   } while ((digit & 128) != 0);
+
+   *lengthLength = len-1;
+
+   for (i = 0;i<length;i++) {
+      if (len < MQTT_MAX_PACKET_SIZE) {
+         conn->buffer[len++] = sock_getc(conn->socket);
+      } else {
+         sock_getc(conn->socket);
+         len = 0; // This will cause the packet to be ignored.
+      }
+   }
+
+   return len;
+}
+
+/*** BeginHeader mqttLoop*/
+BOOLEAN mqttLoop(mqttConnection *conn);
+/*** EndHeader */
+BOOLEAN mqttLoop(mqttConnection *conn) {
+   auto longword t;
+   auto uint8 llen, type;
+   auto uint16 len, tl, i;
+   auto uint8 *payload;
+   auto char far *topic;
+   // TODO: Verify connection?
+   // if (!connected) return FALSE; // Or something...
+   tcp_tick(conn->socket);
+   t = MS_TIMER;
+
+   // The client sends a PINGREQ packet if it hasn't received anything from the
+   // server within the KA interval.
+   if ((t - conn->lastInActivity > MQTT_KEEPALIVE*1000UL)
+         || (t - conn->lastOutActivity > MQTT_KEEPALIVE*1000UL)) {
+      if (conn->pingOutstanding) {
+         // _client->stop(); // <- ???
+         return FALSE;
+      } else {
+         conn->buffer[0] = MQTTPINGREQ;
+         conn->buffer[1] = '\0';
+         sock_fastwrite(conn->socket,conn->buffer,2); // TODO: check ret. value
+         conn->lastOutActivity = t;
+         conn->lastInActivity = t;
+         conn->pingOutstanding = TRUE;
+      }
+   }
+
+   if (sock_bytesready(conn->socket) > 0) {
+      len = mqttReadPacket(conn, &llen);
+      if (len > 0) {
+         conn->lastInActivity = t;
+         type = conn->buffer[0]&0xF0;
+         if (type == MQTTPUBLISH) {
+            if (conn->callback) {
+               tl = (conn->buffer[llen+1]<<8)+conn->buffer[llen+2];
+               topic = malloc(tl+1);
+               _f_memcpy(topic, &conn->buffer[llen+3], tl);
+               topic[tl] = '\0';
+               // ignore msgID - only support QoS 0 subs
+               payload = conn->buffer+llen+3+tl;
+               conn->callback(topic,payload,len-llen-3-tl);
+               free(topic);
+            }
+         } else if (type == MQTTPINGREQ) {
+            conn->buffer[0] = MQTTPINGRESP;
+            conn->buffer[1] = '\0';
+            i = sock_fastwrite(conn->socket, conn->buffer, 2);
+            sock_flush(conn->socket);
+         } else if (type == MQTTPINGRESP) {
+            conn->pingOutstanding = FALSE;
+         }
+      }
+   }
+   return TRUE;
+   return FALSE; // <- If not connected?
+}
+/*** BeginHeader mqttTick*/
+void mqttTick(struct mqttConnection *conn);
+/*** EndHeader */
+void mqttTick(struct mqttConnection *conn) {
+   static char msg[800];
+   static int p;
+   int i;
+   char buffer[200];
+   int bytes_read;
+
+   tcp_tick(conn->socket);
+   if (p<0 || p>800) {
+      p=0;
+   }
+   bytes_read=sock_fastread(conn->socket,buffer,sizeof(buffer)-1);
+
+   if(bytes_read>0) {
+      for (i=0;i<bytes_read;i++){
+         if (buffer[i]!=0) {
+            if (p>sizeof(msg)) {
+               p=0;
+            }
+            msg[p]=buffer[i];
+            p++;
+         } else {
+            msg[p]='\0';
+            stompHandleMessage(conn, msg);
+            p=0;
+         }
+      }
+      buffer[bytes_read]=0;
+   }
 }
 
 /*** BeginHeader */
