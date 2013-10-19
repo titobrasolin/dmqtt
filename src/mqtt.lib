@@ -1,0 +1,92 @@
+/* START LIBRARY DESCRIPTION *********************************************
+MQTT.LIB
+
+The DMQTT Project
+Copyright (C) 2013  Tito Brasolin tito.brasolin(at)gmail.com
+
+This library is free software; you can redistribute it and/or
+modify it under the terms of the GNU Lesser General Public
+License as published by the Free Software Foundation; either
+version 2.1 of the License, or (at your option) any later version.
+
+This library is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+Lesser General Public License for more details.
+
+You should have received a copy of the GNU Lesser General Public
+License along with this library; if not, write to the Free Software
+Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
+
+DESCRIPTION: MQTT Client Library written in Dynamic C for Rabbit
+
+The following libraries must be #use'd in this order:
+#use ucos2.lib
+#use dcrtcp.lib
+#use mqtt.lib
+
+END DESCRIPTION **********************************************************/
+
+/*** BeginHeader */
+#ifndef __MQTT_LIB
+#define __MQTT_LIB
+
+// MQTT_MAX_PACKET_SIZE : Maximum packet size
+#define MQTT_MAX_PACKET_SIZE 128
+
+// MQTT_KEEPALIVE : keepAlive interval in Seconds
+#define MQTT_KEEPALIVE 15
+
+#define MQTTPROTOCOLVERSION 3
+#define MQTTCONNECT 1 << 4 // Client request to connect to Server
+#define MQTTCONNACK 2 << 4 // Connect Acknowledgment
+#define MQTTPUBLISH 3 << 4 // Publish message
+#define MQTTPUBACK 4 << 4 // Publish Acknowledgment
+#define MQTTPUBREC 5 << 4 // Publish Received (assured delivery part 1)
+#define MQTTPUBREL 6 << 4 // Publish Release (assured delivery part 2)
+#define MQTTPUBCOMP 7 << 4 // Publish Complete (assured delivery part 3)
+#define MQTTSUBSCRIBE 8 << 4 // Client Subscribe request
+#define MQTTSUBACK 9 << 4 // Subscribe Acknowledgment
+#define MQTTUNSUBSCRIBE 10 << 4 // Client Unsubscribe request
+#define MQTTUNSUBACK 11 << 4 // Unsubscribe Acknowledgment
+#define MQTTPINGREQ 12 << 4 // PING Request
+#define MQTTPINGRESP 13 << 4 // PING Response
+#define MQTTDISCONNECT 14 << 4 // Client is Disconnecting
+#define MQTTReserved 15 << 4 // Reserved
+
+#define MQTTQOS0 (0 << 1)
+#define MQTTQOS1 (1 << 1)
+#define MQTTQOS2 (2 << 1)
+
+typedef struct mqttConnection {
+	char host[100];
+	word port;
+   char name[15];
+   char pass[20];
+   int state;
+	void* socket;
+   void (*onMessage)();
+   byte buffer[MQTT_MAX_PACKET_SIZE];
+   word nextMsgId;
+   longword lastOutActivity;
+   longword lastInActivity;
+   BOOLEAN pingOutstanding;
+} mqttConnection;
+/*** EndHeader */
+
+/*** BeginHeader mqttSetConnectInfo*/
+void mqttSetConnectInfo(mqttConnection *conn, char *host,
+	word port, char *name, char *passcode);
+/*** EndHeader */
+void mqttSetConnectInfo(mqttConnection *conn, char *host,
+	word port, char *name, char *pass) {
+	   conn->port=port;
+	   strcpy(conn->host, host);
+	   strcpy(conn->name, name);
+	   strcpy(conn->pass, pass);
+}
+
+/*** BeginHeader */
+#endif // __MQTT_LIB
+/*** EndHeader */
+
