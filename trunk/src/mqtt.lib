@@ -59,12 +59,12 @@ END DESCRIPTION **********************************************************/
 #define MQTTQOS2 (2 << 1)
 
 typedef struct mqttConnection {
-	char host[100];
-	word port;
+   char host[100];
+   word port;
    char name[15];
    char pass[20];
    int state;
-	void* socket;
+   void* socket;
    void (*onMessage)();
    byte buffer[MQTT_MAX_PACKET_SIZE];
    word nextMsgId;
@@ -76,14 +76,14 @@ typedef struct mqttConnection {
 
 /*** BeginHeader mqttSetConnectInfo*/
 void mqttSetConnectInfo(mqttConnection *conn, char *host,
-	word port, char *name, char *passcode);
+   word port, char *name, char *passcode);
 /*** EndHeader */
 void mqttSetConnectInfo(mqttConnection *conn, char *host,
-	word port, char *name, char *pass) {
-	   conn->port=port;
-	   strcpy(conn->host, host);
-	   strcpy(conn->name, name);
-	   strcpy(conn->pass, pass);
+   word port, char *name, char *pass) {
+      conn->port=port;
+      strcpy(conn->host, host);
+      strcpy(conn->name, name);
+      strcpy(conn->pass, pass);
 }
 
 /*** BeginHeader */
