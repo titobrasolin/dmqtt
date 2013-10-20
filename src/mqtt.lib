@@ -74,7 +74,70 @@ typedef struct mqttConnection {
    BOOLEAN pingOutstanding;
    mqttCallback callback;
    } mqttConnection;
+
+#define _SOCK_OF_MQTT(conn) ((conn)->socket)
 /*** EndHeader */
+
+BOOLEAN _mqttWrite(mqttConnection *conn, byte header, char __far * buf,
+      word length) {
+   auto int rc;
+   auto byte digit
+           , pos = 0;
+   auto byte lenBuf[4]; // Will represent the number of bytes remaining within
+                        // the current message, including data in the variable
+                        // header and the payload. The protocol limits the
+                        // number of bytes in the representation to a maximum of
+                        // four.
+   auto byte llen = 0;  // Actual number of bytes in the representation.
+   // The table below shows the Remaining Length values represented by
+   // increasing numbers of bytes.
+   // +--------+------------------------------+--------------------------------+
+   // | Digits |             From             |               To               |
+   // +--------+------------------------------+--------------------------------+
+   // |   1    | 0 (0x00)                     | 127 (0x7F)                     |
+   // +--------+------------------------------+--------------------------------+
+   // |   2    | 2,128 (0x80, 0x01)           | 16,383 (0xFF, 0x7F)            |
+   // +--------+------------------------------+--------------------------------+
+   // |   3    | 16,384 (0x80, 0x80, 0x01)    | 2,097,151 (0xFF, 0xFF, 0x7F)   |
+   // +--------+------------------------------+--------------------------------+
+   // |   4    | 2,097,152 (0x80, 0x80, 0x80, | 268,435,455 (0xFF, 0xFF, 0xFF, |
+   // |        | 0x01)                        | 0x7F)                          |
+   // +--------+------------------------------+--------------------------------+
+   // The algorithm for encoding a decimal number (X) into the variable length
+   // encoding scheme is as follows.
+   uint16 X = length;
+   do {
+      digit = X % 128;
+      X = X / 128;
+      if (X > 0) {
+         digit |= 0x80;
+      }
+      lenBuf[pos++] = digit;
+      llen++;
+   } while(X>0);
+
+   buf[4-llen] = header;
+   _f_memcpy(buf+(5-llen), lenBuf, llen);
+
+   rc = sock_fastwrite(_SOCK_OF_MQTT(conn), buf+(4-llen), 1+llen+length);
+   conn->lastOutActivity = MS_TIMER;
+
+   return (rc == 1+llen+length);
+}
+
+uint16 _mqttWriteString(char* string, uint8* buf, uint16 pos) {
+   auto char* idp = string;
+   auto uint16 i = 0;
+
+   pos += 2;
+   while (*idp) {
+      buf[pos++] = *idp++;
+      i++;
+   }
+   buf[pos-i-2] = (i >> 8);
+   buf[pos-i-1] = (i & 0xFF);
+   return pos;
+}
 
 /*** BeginHeader mqttSetConnectInfo*/
 void mqttSetConnectInfo(mqttConnection *conn, char *host,
@@ -95,21 +158,30 @@ void mqttConnect(mqttConnection *conn, void* socket);
 void mqttConnect(mqttConnection *conn, void* socket) {
    int status;
    longword ip;
-   conn->socket=socket;
+   conn->socket = socket;
 
+   // Close an open socket. The socket cannot be reused until it is completely
+   // closed. You can tell a tcp socket is closed e.g. by running
+   // sock_wait_closed(s).
    sock_close(socket);
+
+   // Reference to '_ip_delay2' has no corresponding prototype.
+   #define _ip_delay2 ip_delay2
+   sock_wait_closed(socket, 0, NULL, &status);
+
+   // Wait for interface to come up, just in case.
    while (ifpending(IF_DEFAULT) == IF_COMING_UP) {
       tcp_tick(NULL);
    }
 
    if (isaddr(conn->host)) {
-      ip=inet_addr(conn->host);
+      ip = inet_addr(conn->host);
    } else {
-      ip=resolve(conn->host);
+      ip = resolve(conn->host); // NOTE: this function blocks.
    }
-   tcp_open(conn->socket,0,ip,conn->port,NULL);
+   tcp_open(conn->socket, 0, ip, conn->port, NULL);
+   sock_mode(conn->socket, TCP_MODE_BINARY); // An arbitrary stream of bytes is allowed.
 
-   sock_mode(conn->socket,TCP_MODE_BINARY); //TCP_MODE_ASCII);
    sock_err:
       switch(status) {
          case 1: /* foreign host closed */
@@ -275,9 +347,9 @@ BOOLEAN mqttLoop(mqttConnection *conn) {
    return FALSE; // <- If not connected?
 }
 /*** BeginHeader mqttTick*/
-void mqttTick(struct mqttConnection *conn);
+void mqttTick(mqttConnection *conn);
 /*** EndHeader */
-void mqttTick(struct mqttConnection *conn) {
+void mqttTick(mqttConnection *conn) {
    static char msg[800];
    static int p;
    int i;
@@ -306,6 +378,31 @@ void mqttTick(struct mqttConnection *conn) {
       }
       buffer[bytes_read]=0;
    }
+}
+
+/*** BeginHeader mqttPublish*/
+BOOLEAN mqttPublish(mqttConnection *conn, char* topic, uint8* payload,
+      unsigned int plength, BOOLEAN retained);
+/*** EndHeader */
+BOOLEAN mqttConnected(mqttConnection *conn) { return TRUE; }
+BOOLEAN mqttPublish(mqttConnection *conn, char* topic, uint8* payload,
+      unsigned int plength, BOOLEAN retained) {
+   auto uint16 length, i;
+   auto uint8 header
+   if (mqttConnected(conn)) {
+      // Leave room in the buffer for header and variable length field.
+      length = 5;
+      length = _mqttWriteString(topic, conn->buffer, length);
+      for (i=0; i<plength; i++) {
+         conn->buffer[length++] = payload[i];
+      }
+      header = MQTTPUBLISH;
+      if (retained) {
+         header |= 1;
+      }
+      return write(header, conn->buffer, length-5);
+   }
+   return FALSE;
 }
 
 /*** BeginHeader */
