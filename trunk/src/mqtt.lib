@@ -23,6 +23,8 @@ DESCRIPTION: MQTT Client Library written in Dynamic C for Rabbit
 The following libraries must be #use'd in this order:
 #use ucos2.lib
 #use dcrtcp.lib
+#use modbus_slave.lib
+#use modbus_slave_tcp.lib
 #use mqtt.lib
 
 END DESCRIPTION **********************************************************/
@@ -30,6 +32,28 @@ END DESCRIPTION **********************************************************/
 /*** BeginHeader */
 #ifndef __MQTT_LIB
 #define __MQTT_LIB
+
+#ifdef MQTT_DEBUG
+   #define _mqtt_debug __debug
+#else
+   #define _mqtt_debug __nodebug
+#endif
+
+#ifndef MQTT_VERBOSE
+   #define MQTT_VERBOSE 0
+#endif
+
+// It is recommended that user names are kept to 12 characters or fewer,
+// but it is not required.
+#ifndef MQTT_MAXNAME
+   #define MQTT_MAXNAME 13
+#endif
+
+// It is recommended that passwords are kept to 12 characters or fewer,
+// but it is not required.
+#ifndef MQTT_MAXPASS
+   #define MQTT_MAXPASS 13
+#endif
 
 // MQTT_MAX_PACKET_SIZE : Maximum packet size
 #define MQTT_MAX_PACKET_SIZE 128
@@ -75,20 +99,74 @@ typedef struct mqttConnection {
    mqttCallback callback;
    } mqttConnection;
 
-#define _SOCK_OF_MQTT(conn) ((conn)->socket)
+#define _SOCK_OF_MQTT(state) _TCP_SOCK(state->sock)
+typedef struct MqttState_t {
+   void* sock;
+   char state;
+   char host[DNS_MAX_NAME]; // Null-terminated dotted ip address or host name.
+   word port;
+   char name[MQTT_MAXNAME]; // Null-terminated user name.
+   char pass[MQTT_MAXPASS]; // Null-terminated password.
+   void (*callback)();
+   byte buffer[MQTT_MAX_PACKET_SIZE];
+   word nextMsgId;
+   longword epoch; // Session start time (MS_TIMER)
+   long rx_ka; // RX keepalive timer. Use this to send KAs to server if no
+               // messages sent in the interval.
+   long tx_ka; // TX keepalive timer. If no KAs received from server in this
+               // interval, can the connection.
+   BOOLEAN pingOutstanding;
+} MqttState;
 /*** EndHeader */
 
-BOOLEAN _mqttWrite(mqttConnection *conn, byte header, char __far * buf,
-      word length) {
-   auto int rc;
-   auto byte digit
-           , pos = 0;
+/*** BeginHeader mqtt_Handler */
+void mqtt_Handler(MqttState __far * s);
+/*** EndHeader  */
+void mqtt_Handler(MqttState __far * s) {
+   // TODO: Handler, see modbus_slave.lib for inspiration.
+}
+
+/*** BeginHeader mqtt_init */
+void mqtt_init(MqttState __far * s, tcp_Socket *t);
+/*** EndHeader  */
+_mqtt_debug
+void mqtt_init(MqttState __far * s, tcp_Socket *t) {
+   static int first_time = 1;
+   _f_memset(s, 0, sizeof(*s));
+   s->sock = t;
+   // s->callback = ...
+   if (first_time) {
+      first_time = 0;
+      // TODO: Something?
+   }
+}
+/*** BeginHeader _mqtt_getElapsed */
+char * _mqtt_getElapsed(MqttState __far * s);
+/*** EndHeader  */
+_mqtt_debug
+char * _mqtt_getElapsed(MqttState __far * s) {
+   static char stamp[20];
+   longword ms = MS_TIMER - s->epoch;
+   sprintf(stamp, "%06lu.%02u", ms / 1000, (word)(ms % 1000 / 10));
+   return stamp;
+}
+
+/*** BeginHeader mqtt_send_msg */
+int mqtt_send_msg(MqttState __far * s, byte header, void __far * msg, word len);
+/*** EndHeader  */
+_mqtt_debug
+int mqtt_send_msg(MqttState __far * s, byte header, void __far * msg, word len)
+{
+   auto int wr;
+   auto byte digit;
    auto byte lenBuf[4]; // Will represent the number of bytes remaining within
                         // the current message, including data in the variable
                         // header and the payload. The protocol limits the
                         // number of bytes in the representation to a maximum of
                         // four.
+   auto word pos = 0;
    auto byte llen = 0;  // Actual number of bytes in the representation.
+
    // The table below shows the Remaining Length values represented by
    // increasing numbers of bytes.
    // +--------+------------------------------+--------------------------------+
@@ -103,9 +181,9 @@ BOOLEAN _mqttWrite(mqttConnection *conn, byte header, char __far * buf,
    // |   4    | 2,097,152 (0x80, 0x80, 0x80, | 268,435,455 (0xFF, 0xFF, 0xFF, |
    // |        | 0x01)                        | 0x7F)                          |
    // +--------+------------------------------+--------------------------------+
+   auto word X = len;
    // The algorithm for encoding a decimal number (X) into the variable length
    // encoding scheme is as follows.
-   uint16 X = length;
    do {
       digit = X % 128;
       X = X / 128;
@@ -116,27 +194,41 @@ BOOLEAN _mqttWrite(mqttConnection *conn, byte header, char __far * buf,
       llen++;
    } while(X>0);
 
-   buf[4-llen] = header;
-   _f_memcpy(buf+(5-llen), lenBuf, llen);
-
-   rc = sock_fastwrite(_SOCK_OF_MQTT(conn), buf+(4-llen), 1+llen+length);
-   conn->lastOutActivity = MS_TIMER;
-
-   return (rc == 1+llen+length);
-}
-
-uint16 _mqttWriteString(char* string, uint8* buf, uint16 pos) {
-   auto char* idp = string;
-   auto uint16 i = 0;
-
-   pos += 2;
-   while (*idp) {
-      buf[pos++] = *idp++;
-      i++;
+   tcp_tick(NULL);
+   wr = sock_writable(_SOCK_OF_MQTT(s));
+   if (!wr) {
+      // _mqtt_handle_error(_SOCK_OF_MQTT(s), 4); // TODO: Implement.
+      return -EIO;
    }
-   buf[pos-i-2] = (i >> 8);
-   buf[pos-i-1] = (i & 0xFF);
-   return pos;
+
+   --wr;
+   if ((word)wr < len+llen) {
+      return -EAGAIN;
+   }
+
+#if MQTT_VERBOSE > 2
+   #if MQTT_VERBOSE == 3
+   if (TRUE) {
+   #endif
+   printf("\n%s --> MQTT: sending message\n", _mqtt_getElapsed(s));
+   printf("  header=0x%02X\n", header);
+   printf("  len=%u\n", len);
+   mem_dump(msg, len);
+   printf("\n");
+   #if MQTT_VERBOSE == 3
+   }
+   #endif
+#endif
+
+   sock_noflush(_SOCK_OF_MQTT(s));
+   sock_fastwrite(_SOCK_OF_MQTT(s), (char __far *)&header, 1);
+   sock_fastwrite(_SOCK_OF_MQTT(s), (char __far *)lenBuf, llen);
+   if (len) {
+      sock_fastwrite(_SOCK_OF_MQTT(s), msg, len);
+   }
+   sock_flush(_SOCK_OF_MQTT(s));
+   s->rx_ka = _SET_TIMEOUT(MQTT_KEEPALIVE*1000UL);
+   return 0;
 }
 
 /*** BeginHeader mqttSetConnectInfo*/
@@ -174,11 +266,7 @@ void mqttConnect(mqttConnection *conn, void* socket) {
       tcp_tick(NULL);
    }
 
-   if (isaddr(conn->host)) {
-      ip = inet_addr(conn->host);
-   } else {
-      ip = resolve(conn->host); // NOTE: this function blocks.
-   }
+   ip = resolve(conn->host); // NOTE: this function blocks.
    tcp_open(conn->socket, 0, ip, conn->port, NULL);
    sock_mode(conn->socket, TCP_MODE_BINARY); // An arbitrary stream of bytes is allowed.
 
@@ -224,7 +312,7 @@ void mqttHandleMessage(mqttConnection *conn, char * msg) {
 }
 
 /*** BeginHeader mqttReadPacket*/
-uint16 mqttReadPacket(mqttConnection *conn, char * msg);
+uint16 mqttReadPacket(MqttState __far * s, char * msg);
 /*** EndHeader */
 /*
 The message header for each MQTT command message contains a fixed header.
@@ -243,14 +331,14 @@ Byte 2
    (At least one byte) contains the Remaining Length field.
 
 */
-uint16 mqttReadPacket(mqttConnection *conn, uint8* lengthLength) {
+uint16 mqttReadPacket(MqttState __far * s, uint8* lengthLength) {
    uint16 len, length, i;
    uint8 digit, multiplier;
 
    // Byte 1 contains the Message Type and Flags (DUP, QoS level, and RETAIN)
    // fields.
    len = 0;
-   conn->buffer[len++] = sock_getc(conn->socket); // NOTE: this function blocks.
+   s->buffer[len++] = sock_getc(_SOCK_OF_MQTT(s)); // NOTE: this function blocks.
 
    // Byte 2 (at least one byte) contains the Remaining Length field.
    // The variable length encoding scheme uses a single byte for messages up to
@@ -266,8 +354,8 @@ uint16 mqttReadPacket(mqttConnection *conn, uint8* lengthLength) {
    length = 0;
    multiplier = 1;
    do {
-      digit = sock_getc(conn->socket);
-      conn->buffer[len++] = digit;
+      digit = sock_getc(_SOCK_OF_MQTT(s));
+      s->buffer[len++] = digit;
       length += (digit & 127) * multiplier;
       multiplier *= 128;
    } while ((digit & 128) != 0);
@@ -276,9 +364,9 @@ uint16 mqttReadPacket(mqttConnection *conn, uint8* lengthLength) {
 
    for (i = 0;i<length;i++) {
       if (len < MQTT_MAX_PACKET_SIZE) {
-         conn->buffer[len++] = sock_getc(conn->socket);
+         s->buffer[len++] = sock_getc(_SOCK_OF_MQTT(s));
       } else {
-         sock_getc(conn->socket);
+         sock_getc(_SOCK_OF_MQTT(s));
          len = 0; // This will cause the packet to be ignored.
       }
    }
@@ -287,59 +375,58 @@ uint16 mqttReadPacket(mqttConnection *conn, uint8* lengthLength) {
 }
 
 /*** BeginHeader mqttLoop*/
-BOOLEAN mqttLoop(mqttConnection *conn);
+BOOLEAN mqttLoop(MqttState __far * s);
 /*** EndHeader */
-BOOLEAN mqttLoop(mqttConnection *conn) {
+BOOLEAN mqttLoop(MqttState __far * s) {
    auto longword t;
    auto uint8 llen, type;
    auto uint16 len, tl, i;
-   auto uint8 *payload;
-   auto char far *topic;
+   auto __far char *payload;
+   auto __far char *topic;
    // TODO: Verify connection?
    // if (!connected) return FALSE; // Or something...
-   tcp_tick(conn->socket);
-   t = MS_TIMER;
+   tcp_tick(_SOCK_OF_MQTT(s));
 
    // The client sends a PINGREQ packet if it hasn't received anything from the
    // server within the KA interval.
-   if ((t - conn->lastInActivity > MQTT_KEEPALIVE*1000UL)
-         || (t - conn->lastOutActivity > MQTT_KEEPALIVE*1000UL)) {
-      if (conn->pingOutstanding) {
+   if (_CHK_TIMEOUT(s->rx_ka) || _CHK_TIMEOUT(s->tx_ka)) {
+      if (s->pingOutstanding) {
          // _client->stop(); // <- ???
          return FALSE;
       } else {
-         conn->buffer[0] = MQTTPINGREQ;
-         conn->buffer[1] = '\0';
-         sock_fastwrite(conn->socket,conn->buffer,2); // TODO: check ret. value
-         conn->lastOutActivity = t;
-         conn->lastInActivity = t;
-         conn->pingOutstanding = TRUE;
+         s->buffer[0] = MQTTPINGREQ;
+         s->buffer[1] = '\0';
+         sock_fastwrite(_SOCK_OF_MQTT(s),s->buffer,2); // TODO: check ret. value
+         s->rx_ka = _SET_TIMEOUT(MQTT_KEEPALIVE*1000UL);
+         s->tx_ka = _SET_TIMEOUT(MQTT_KEEPALIVE*1000UL);
+
+         s->pingOutstanding = TRUE;
       }
    }
 
-   if (sock_bytesready(conn->socket) > 0) {
-      len = mqttReadPacket(conn, &llen);
+   if (sock_bytesready(_SOCK_OF_MQTT(s)) > 0) {
+      len = mqttReadPacket(s, &llen);
       if (len > 0) {
-         conn->lastInActivity = t;
-         type = conn->buffer[0]&0xF0;
+         s->tx_ka = _SET_TIMEOUT(MQTT_KEEPALIVE*1000UL);
+         type = s->buffer[0]&0xF0;
          if (type == MQTTPUBLISH) {
-            if (conn->callback) {
-               tl = (conn->buffer[llen+1]<<8)+conn->buffer[llen+2];
+            if (s->callback) {
+               tl = (s->buffer[llen+1]<<8)+s->buffer[llen+2];
                topic = malloc(tl+1);
-               _f_memcpy(topic, &conn->buffer[llen+3], tl);
+               _f_memcpy(topic, &s->buffer[llen+3], tl);
                topic[tl] = '\0';
                // ignore msgID - only support QoS 0 subs
-               payload = conn->buffer+llen+3+tl;
-               conn->callback(topic,payload,len-llen-3-tl);
+               payload = s->buffer+llen+3+tl;
+               s->callback(topic,payload,len-llen-3-tl);
                free(topic);
             }
          } else if (type == MQTTPINGREQ) {
-            conn->buffer[0] = MQTTPINGRESP;
-            conn->buffer[1] = '\0';
-            i = sock_fastwrite(conn->socket, conn->buffer, 2);
-            sock_flush(conn->socket);
+            s->buffer[0] = MQTTPINGRESP;
+            s->buffer[1] = '\0';
+            i = sock_fastwrite(_SOCK_OF_MQTT(s), s->buffer, 2);
+            sock_flush(_SOCK_OF_MQTT(s));
          } else if (type == MQTTPINGRESP) {
-            conn->pingOutstanding = FALSE;
+            s->pingOutstanding = FALSE;
          }
       }
    }
