@@ -83,6 +83,18 @@ END DESCRIPTION **********************************************************/
 #define MQTTQOS1 (1 << 1)
 #define MQTTQOS2 (2 << 1)
 
+#define MQTT_STATE_INIT        0
+#define MQTT_STATE_WAIT_FOR_IF 1
+#define MQTT_STATE_SERVICE_UP  2
+#define MQTT_STATE_INIT_SOKET  3
+#define MQTT_STATE_WAIT_SOKET  4
+#define MQTT_STATE_CRIDIT      5
+#define MQTT_STATE_SUB         6
+#define MQTT_STATE_ACTIVE      7
+
+#define _TCP_SOCK_OF_MQTT(state) (&(state)->s)
+#define _SOCK_OF_MQTT(state) _TCP_SOCK(state->sock)
+
 typedef void (*mqttCallback)(far char*, uint8*, unsigned int);
 typedef struct mqttConnection {
    char host[100];
@@ -99,17 +111,20 @@ typedef struct mqttConnection {
    mqttCallback callback;
    } mqttConnection;
 
-#define _SOCK_OF_MQTT(state) _TCP_SOCK(state->sock)
+typedef void (*MqttCallback)(far char*, uint8*, unsigned int);
 typedef struct MqttState_t {
-   void* sock;
+   void* sock; // Currently pointing to tcp_Socket instance ('s') below.
+   tcp_Socket s;
    char state;
    char host[DNS_MAX_NAME]; // Null-terminated dotted ip address or host name.
    word port;
    char name[MQTT_MAXNAME]; // Null-terminated user name.
    char pass[MQTT_MAXPASS]; // Null-terminated password.
-   void (*callback)();
+   MqttCallback callback;   // Called when message received.
    byte buffer[MQTT_MAX_PACKET_SIZE];
    word nextMsgId;
+   // longword lastOutActivity;
+   // longword lastInActivity;
    longword epoch; // Session start time (MS_TIMER)
    long rx_ka; // RX keepalive timer. Use this to send KAs to server if no
                // messages sent in the interval.
@@ -117,7 +132,199 @@ typedef struct MqttState_t {
                // interval, can the connection.
    BOOLEAN pingOutstanding;
 } MqttState;
+
+typedef struct MqttState_t __far * MqttState_fp;
+typedef struct MqttState_t * MqttState_p;
 /*** EndHeader */
+
+/*** BeginHeader mqtt_Init */
+void mqtt_Init(MqttState_p s, char* host, word port, MqttCallback callback);
+/*** EndHeader  */
+/* START FUNCTION DESCRIPTION ********************************************
+mqtt_Init <MQTT.LIB>
+END DESCRIPTION **********************************************************/
+_mqtt_debug
+void mqtt_Init(MqttState_p s, char* host, word port, MqttCallback callback) {
+   auto tcp_Socket * sock = _TCP_SOCK_OF_MQTT(s);
+
+   _f_memset(s, 0, sizeof(*s));
+   s->sock = sock;
+
+   strncpy(s->host, host, DNS_MAX_NAME-1);
+   s->host[DNS_MAX_NAME-1] = '\0';
+
+   s->port = port;
+   s->callback = callback;
+   }
+
+/*** BeginHeader mqtt_Connect */
+BOOLEAN mqtt_Connect(MqttState_p s, char *id, char *user, char *pass,
+      char* willTopic, uint8 willQos, uint8 willRetain, char* willMessage);
+/*** EndHeader  */
+/* START FUNCTION DESCRIPTION ********************************************
+mqtt_Connect <MQTT.LIB>
+
+PARAMETER1:
+
+PARAMETER2: The Client Identifier (Client ID) is between 1 and 23 characters
+            long, and uniquely identifies the client to the server. It must be
+            unique across all clients connecting to a single server, and is the
+            key in handling Message IDs messages with QoS levels 1 and 2. If the
+            Client ID contains more than 23 characters, the server responds to
+            the CONNECT message with a CONNACK return code 2: Identifier
+            Rejected.
+
+PARAMETER3:
+PARAMETER4:
+PARAMETER5:
+PARAMETER6:
+PARAMETER7:
+PARAMETER8:
+
+END DESCRIPTION **********************************************************/
+_mqtt_debug
+BOOLEAN mqtt_Connect(MqttState_p s, char *id, char *user, char *pass,
+      char* willTopic, uint8 willQos, uint8 willRetain, char* willMessage)
+{
+   auto int status;
+   auto longword ip;
+   auto word lenId, lenUser, lenPass, lenWillTopic, lenWillMessage;
+   auto word bufsize, length, j;
+   auto byte connectFlags;
+   auto byte far * msg;
+   static uint8 d[9] = {0x00,0x06,'M','Q','I','s','d','p',MQTTPROTOCOLVERSION};
+
+   // sock_close(_SOCK_OF_MQTT(s));
+
+   // Reference to '_ip_delay2' has no corresponding prototype.
+   #define _ip_delay2 ip_delay2
+   //sock_wait_closed(_SOCK_OF_MQTT(s), 0, NULL, &status);
+
+   // Wait for interface to come up, just in case.
+   //while (ifpending(IF_DEFAULT) == IF_COMING_UP) {
+   //   tcp_tick(NULL);
+   //}
+
+   ip = resolve(s->host); // NOTE: this function blocks!
+   if (tcp_open(_SOCK_OF_MQTT(s), 0, ip, s->port, NULL)) {
+      s->nextMsgId = 1;
+
+      lenId = (id?strlen(id):0);
+      lenUser = (user?strlen(user):0);
+      lenPass = (pass?strlen(pass):0);
+      lenWillTopic = (willTopic?strlen(willTopic):0);
+      lenWillMessage = (willMessage?strlen(willMessage):0);
+
+      bufsize = 1                      // Header.
+              + 4                      // Remaining length.
+              + (2+strlen("MQIsdp"))   // Protocol Name.
+              + 1                      // Protocol Version Number.
+              + 1                      // Connect flags.
+              + 2                      // Keep Alive timer.
+              + (2+lenId);             // Client Identifier.
+
+      if (willTopic) {
+         bufsize += (2+lenWillTopic);   // Will Topic
+         bufsize += (2+lenWillMessage); // Will Message
+         connectFlags = 0x06|(willQos<<3)|(willRetain<<5);
+      } else {
+         connectFlags = 0x02;
+      }
+
+      if (user) {
+         bufsize += (2+lenUser);    // User Name.
+         connectFlags |= 0x80;
+         if (pass) {
+            bufsize += (2+lenPass); // Password.
+            connectFlags |= (0x80>>1);
+         }
+      }
+
+      // Allocate buffer.
+      msg = malloc(bufsize);
+      // Leave room in the buffer for header and variable length field.
+      length = 5;
+
+      // Write protocol name and version.
+      for (j=0; j<9; j++) {
+         msg[length++] = d[j];
+      }
+
+      // Write connect flags.
+      msg[length++] = connectFlags;
+
+      // Write keep Alive timer.
+      msg[length++] = ((MQTT_KEEPALIVE) >> 8);
+      msg[length++] = ((MQTT_KEEPALIVE) & 0xFF);
+
+      // The payload contains one or more UTF-8 encoded strings. They specify a
+      // unqiue identifier for the client, a Will topic and message and the User
+      // Name and Password to use. All but the first are optional and their
+      // presence is determined based on flags in the variable header.
+      msg[length++] = (lenId >> 8);
+      msg[length++] = (lenId & 0xFF);
+      _f_memcpy(&msg[length], id, lenId);
+      length += lenId;
+
+      // TODO: REFACTORING!!!
+      if (willTopic) {
+         msg[length++] = (lenWillTopic >> 8);
+         msg[length++] = (lenWillTopic & 0xFF);
+         _f_memcpy(&msg[length], willTopic, lenWillTopic);
+         length += lenWillTopic;
+
+         msg[length++] = (lenWillMessage >> 8);
+         msg[length++] = (lenWillMessage & 0xFF);
+         _f_memcpy(&msg[length], willMessage, lenWillMessage);
+         length += lenWillMessage;
+      }
+
+      if(user) {
+         msg[length++] = (lenUser >> 8);
+         msg[length++] = (lenUser & 0xFF);
+         _f_memcpy(&msg[length], user, lenUser);
+         length += lenUser;
+         if(pass) {
+            msg[length++] = (lenPass >> 8);
+            msg[length++] = (lenPass & 0xFF);
+            _f_memcpy(&msg[length], pass, lenPass);
+            length += lenPass;
+         }
+      }
+
+      mqtt_Write(s, MQTTCONNECT, msg, length-5);
+      //lastInActivity = lastOutActivity = millis();
+
+      //while (!_client->available()) {
+      //   unsigned long t = millis();
+      //   if (t-lastInActivity > MQTT_KEEPALIVE*1000UL) {
+      //      _client->stop();
+      //      return FALSE;
+      //   }
+      //}
+      //uint8_t llen;
+      //uint16_t len = readPacket(&llen);
+
+      //if (len == 4 && buffer[3] == 0) {
+      //   lastInActivity = millis();
+      //   pingOutstanding = false;
+      //   return TRUE;
+      //}
+      //_client->stop();
+   } // if (tcp_open...
+   return FALSE;
+
+sock_err:
+   switch(status) {
+      case 1: /* foreign host closed */
+      printf("User closed session\n");
+      break;
+   case -1: /* time-out */
+      printf("\nConnection timed out\n");
+      break;
+   }
+   return FALSE;
+}
 
 /*** BeginHeader mqtt_Handler */
 void mqtt_Handler(MqttState __far * s);
@@ -126,20 +333,6 @@ void mqtt_Handler(MqttState __far * s) {
    // TODO: Handler, see modbus_slave.lib for inspiration.
 }
 
-/*** BeginHeader mqtt_init */
-void mqtt_init(MqttState __far * s, tcp_Socket *t);
-/*** EndHeader  */
-_mqtt_debug
-void mqtt_init(MqttState __far * s, tcp_Socket *t) {
-   static int first_time = 1;
-   _f_memset(s, 0, sizeof(*s));
-   s->sock = t;
-   // s->callback = ...
-   if (first_time) {
-      first_time = 0;
-      // TODO: Something?
-   }
-}
 /*** BeginHeader _mqtt_getElapsed */
 char * _mqtt_getElapsed(MqttState __far * s);
 /*** EndHeader  */
@@ -151,11 +344,11 @@ char * _mqtt_getElapsed(MqttState __far * s) {
    return stamp;
 }
 
-/*** BeginHeader mqtt_send_msg */
-int mqtt_send_msg(MqttState __far * s, byte header, void __far * msg, word len);
+/*** BeginHeader mqtt_Write */
+int mqtt_Write(MqttState_p s, byte header, void __far * msg, word len);
 /*** EndHeader  */
 _mqtt_debug
-int mqtt_send_msg(MqttState __far * s, byte header, void __far * msg, word len)
+int mqtt_Write(MqttState_p s, byte header, void __far * msg, word len)
 {
    auto int wr;
    auto byte digit;
@@ -213,7 +406,7 @@ int mqtt_send_msg(MqttState __far * s, byte header, void __far * msg, word len)
    printf("\n%s --> MQTT: sending message\n", _mqtt_getElapsed(s));
    printf("  header=0x%02X\n", header);
    printf("  len=%u\n", len);
-   mem_dump(msg, len);
+   mem_dump(msg, len+5);
    printf("\n");
    #if MQTT_VERBOSE == 3
    }
@@ -229,56 +422,6 @@ int mqtt_send_msg(MqttState __far * s, byte header, void __far * msg, word len)
    sock_flush(_SOCK_OF_MQTT(s));
    s->rx_ka = _SET_TIMEOUT(MQTT_KEEPALIVE*1000UL);
    return 0;
-}
-
-/*** BeginHeader mqttSetConnectInfo*/
-void mqttSetConnectInfo(mqttConnection *conn, char *host,
-      word port, char *name, char *pass, mqttCallback callback);
-/*** EndHeader */
-void mqttSetConnectInfo(mqttConnection *conn, char *host,
-      word port, char *name, char *pass, mqttCallback callback) {
-   conn->callback=callback;
-   conn->port=port;
-   strcpy(conn->host, host);
-   strcpy(conn->name, name);
-   strcpy(conn->pass, pass);
-   }
-
-/*** BeginHeader mqttConnect*/
-void mqttConnect(mqttConnection *conn, void* socket);
-/*** EndHeader */
-void mqttConnect(mqttConnection *conn, void* socket) {
-   int status;
-   longword ip;
-   conn->socket = socket;
-
-   // Close an open socket. The socket cannot be reused until it is completely
-   // closed. You can tell a tcp socket is closed e.g. by running
-   // sock_wait_closed(s).
-   sock_close(socket);
-
-   // Reference to '_ip_delay2' has no corresponding prototype.
-   #define _ip_delay2 ip_delay2
-   sock_wait_closed(socket, 0, NULL, &status);
-
-   // Wait for interface to come up, just in case.
-   while (ifpending(IF_DEFAULT) == IF_COMING_UP) {
-      tcp_tick(NULL);
-   }
-
-   ip = resolve(conn->host); // NOTE: this function blocks.
-   tcp_open(conn->socket, 0, ip, conn->port, NULL);
-   sock_mode(conn->socket, TCP_MODE_BINARY); // An arbitrary stream of bytes is allowed.
-
-   sock_err:
-      switch(status) {
-         case 1: /* foreign host closed */
-            printf("User closed session\n");
-            break;
-         case -1: /* time-out */
-            printf("\nConnection timed out\n");
-            break;
-      }
 }
 
 /*** BeginHeader mqttHandleMessage*/
