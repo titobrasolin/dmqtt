@@ -20,3 +20,9 @@ $ sudo apt-get install mosquitto-clients
 <pre>
 $ mosquitto_sub -d -t hello/world
 </pre>
+
+= Publishing to a Topic =
+
+<pre>
+$ mosquitto_pub -d -t hello/world -m "Hello World"
+</pre>
