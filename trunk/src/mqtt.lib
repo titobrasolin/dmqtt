@@ -21,10 +21,10 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
 DESCRIPTION: MQTT Client Library written in Dynamic C for Rabbit
 
 The following libraries must be #use'd in this order:
-#use ucos2.lib
+#use ucos2.lib  // Optional.
 #use dcrtcp.lib
-#use modbus_slave.lib
-#use modbus_slave_tcp.lib
+#use modbus_slave.lib // Optional.
+#use modbus_slave_tcp.lib // Optional.
 #use mqtt.lib
 
 END DESCRIPTION **********************************************************/
@@ -46,6 +46,10 @@ END DESCRIPTION **********************************************************/
 #include <stdint.h>
 
 #define MQTT_PROTOCOL_VERSION 3
+
+// The server rejects the client identifier if it is not between 1 and 23
+// characters in length.
+#define MQTT_CONF_CLIENTID_LENGTH 24
 
 // It is recommended that user names are kept to 12 characters or fewer,
 // but it is not required.
@@ -97,7 +101,7 @@ typedef struct {
    char host[DNS_MAX_NAME]; // Null-terminated dotted ip address or host name.
    word port;
    // Connection info
-   char clientid[50];
+   char clientid[MQTT_CONF_CLIENTID_LENGTH];
    // Auth fields
    char username[MQTT_CONF_USERNAME_LENGTH];
    char password[MQTT_CONF_PASSWORD_LENGTH];
@@ -489,9 +493,19 @@ void mqtt_init(mqtt_broker_handle_t* broker, const char* clientid) {
    broker->alive = 300; // 300 seconds = 5 minutes
    broker->seq = 1; // Sequency for message indetifiers
    // Client options
-   if(clientid) {
-      strncpy(broker->clientid, clientid, sizeof(broker->clientid));
+   if(clientid && *clientid) {
+      strncpy(broker->clientid, clientid, sizeof(broker->clientid)-1);
    } else {
+      // Canonical abbreviated Device ID.
+      snprintf(broker->clientid, sizeof(broker->clientid),
+         "%02X%02X%02XFF-FF%02X%02X%02X",
+         SysIDBlock.macAddr[0], SysIDBlock.macAddr[1], SysIDBlock.macAddr[2],
+         SysIDBlock.macAddr[3], SysIDBlock.macAddr[4], SysIDBlock.macAddr[5]
+         );
+#if MQTT_VERBOSE
+      printf("MQTT: My client ID is: %s\n", broker->clientid);
+      mem_dump(edp_globals.device_id, 16);
+#endif
       strcpy(broker->clientid, "emqtt");
    }
    // Will topic
@@ -524,9 +538,9 @@ NOTE:
 END DESCRIPTION **********************************************************/
 _mqtt_debug
 void mqtt_init_auth(mqtt_broker_handle_t* broker, const char* username, const char* password) {
-   if(username && username[0] != '\0')
+   if(username && *username)
       strncpy(broker->username, username, sizeof(broker->username)-1);
-   if(password && password[0] != '\0')
+   if(password && *password)
       strncpy(broker->password, password, sizeof(broker->password)-1);
 }
 
@@ -716,7 +730,7 @@ int init_socket(mqtt_broker_handle_t* broker, const char* hostname, short port) 
    auto int flag = 1;
    auto int keepalive = 3; // Seconds
 
-   if(hostname && hostname[0] != '\0') {
+   if(hostname && *hostname) {
       strncpy(broker->host, hostname, sizeof(broker->host)-1);
    }
    broker->port = port;
