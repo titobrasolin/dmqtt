@@ -3,7 +3,7 @@
 
 Here is a nice tutorial: http://nthn.me/posts/2012/mqtt.html
 
-[http://manpages.ubuntu.com/cgi-bin/search.py?q=mosquitto Mosquitto], [http://manpages.ubuntu.com/cgi-bin/search.py?q=mosquitto_pub mosquitto_pub] and [http://manpages.ubuntu.com/cgi-bin/search.py?q=mosquitto_sub mosquitto_sub] are in the official repositories since Oneiric Ocelot (Ubuntu 11.10).
+[http://manpages.ubuntu.com/cgi-bin/search.py?q=mosquitto Mosquitto], [http://manpages.ubuntu.com/cgi-bin/search.py?q=mosquitto_pub mosquitto_pub] and [http://manpages.ubuntu.com/cgi-bin/search.py?q=mosquitto_sub mosquitto_sub] are in the official repositories since [https://wiki.ubuntu.com/OneiricOcelot Oneiric Ocelot] (Ubuntu 11.10).
 
 <pre>
 $ sudo apt-get install mosquitto
