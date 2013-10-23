@@ -7,6 +7,7 @@ Here is a nice tutorial: http://nthn.me/posts/2012/mqtt.html
 [http://mosquitto.org/ Mosquitto] is an Open Source MQTT v3.1 message broker written by Roger Light.
 
 = Installing Mosquitto =
+
 Mosquitto can be installed on recent versions of Ubuntu from the normal package repository: [http://manpages.ubuntu.com/cgi-bin/search.py?q=mosquitto mosquitto], [http://manpages.ubuntu.com/cgi-bin/search.py?q=mosquitto_pub mosquitto_pub] and [http://manpages.ubuntu.com/cgi-bin/search.py?q=mosquitto_sub mosquitto_sub] are in the official repositories since the [https://wiki.ubuntu.com/OneiricOcelot Oneiric Ocelot] (Ubuntu 11.10) release.
 
 <pre>
