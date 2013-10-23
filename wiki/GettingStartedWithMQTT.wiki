@@ -14,3 +14,9 @@ Mosquitto can be installed on recent versions of Ubuntu from the normal package 
 $ sudo apt-get install mosquitto
 $ sudo apt-get install mosquitto-clients
 </pre>
+
+= Subscribing to a Topic =
+
+<pre>
+$ mosquitto_sub -d -t hello/world
+</pre>
