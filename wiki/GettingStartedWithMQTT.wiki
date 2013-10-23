@@ -7,7 +7,7 @@ Thank you, [http://nthn.me/about/ Nathan]!
 
 By the way Nathan was using Maverick Meerkat (Ubuntu 10.10) but [http://manpages.ubuntu.com/cgi-bin/search.py?q=mosquitto mosquitto], [http://manpages.ubuntu.com/cgi-bin/search.py?q=mosquitto_pub mosquitto_pub] and [http://manpages.ubuntu.com/cgi-bin/search.py?q=mosquitto_sub mosquitto_sub] are in the official repositories since Oneiric Ocelot (Ubuntu 11.10) so you don't need to alter your sources.list, just install with:
 
-{{{
+<code language="bat">
 $ sudo apt-get install mosquitto
 $ sudo apt-get install mosquitto-clients
-}}}
+</code>
