@@ -43,596 +43,759 @@ END DESCRIPTION **********************************************************/
    #define MQTT_VERBOSE 0
 #endif
 
+#include <stdint.h>
+
+#define MQTT_PROTOCOL_VERSION 3
+
 // It is recommended that user names are kept to 12 characters or fewer,
 // but it is not required.
-#ifndef MQTT_MAXNAME
-   #define MQTT_MAXNAME 13
+#ifndef MQTT_CONF_USERNAME_LENGTH
+   #define MQTT_CONF_USERNAME_LENGTH 50
 #endif
 
 // It is recommended that passwords are kept to 12 characters or fewer,
 // but it is not required.
-#ifndef MQTT_MAXPASS
-   #define MQTT_MAXPASS 13
+#ifndef MQTT_CONF_PASSWORD_LENGTH
+   #define MQTT_CONF_PASSWORD_LENGTH 33 // 32 character (MD5) + '\0'
 #endif
 
-// MQTT_MAX_PACKET_SIZE : Maximum packet size
-#define MQTT_MAX_PACKET_SIZE 128
+#define MQTT_MSG_CONNECT       1<<4
+#define MQTT_MSG_CONNACK       2<<4
+#define MQTT_MSG_PUBLISH       3<<4
+#define MQTT_MSG_PUBACK        4<<4
+#define MQTT_MSG_PUBREC        5<<4
+#define MQTT_MSG_PUBREL        6<<4
+#define MQTT_MSG_PUBCOMP       7<<4
+#define MQTT_MSG_SUBSCRIBE     8<<4
+#define MQTT_MSG_SUBACK        9<<4
+#define MQTT_MSG_UNSUBSCRIBE  10<<4
+#define MQTT_MSG_UNSUBACK     11<<4
+#define MQTT_MSG_PINGREQ      12<<4
+#define MQTT_MSG_PINGRESP     13<<4
+#define MQTT_MSG_DISCONNECT   14<<4
 
-// MQTT_KEEPALIVE : keepAlive interval in Seconds
-#define MQTT_KEEPALIVE 15
+#define MQTT_DUP_FLAG   1<<3
+#define MQTT_QOS0_FLAG  0<<1
+#define MQTT_QOS1_FLAG  1<<1
+#define MQTT_QOS2_FLAG  2<<1
 
-#define MQTTPROTOCOLVERSION 3
+#define MQTT_RETAIN_FLAG 1
 
-#define MQTTCONNECT      1 << 4 // Client request to connect to Server
-#define MQTTCONNACK      2 << 4 // Connect Acknowledgment
-#define MQTTPUBLISH      3 << 4 // Publish message
-#define MQTTPUBACK       4 << 4 // Publish Acknowledgment
-#define MQTTPUBREC       5 << 4 // Publish Received (assured delivery part 1)
-#define MQTTPUBREL       6 << 4 // Publish Release (assured delivery part 2)
-#define MQTTPUBCOMP      7 << 4 // Publish Complete (assured delivery part 3)
-#define MQTTSUBSCRIBE    8 << 4 // Client Subscribe request
-#define MQTTSUBACK       9 << 4 // Subscribe Acknowledgment
-#define MQTTUNSUBSCRIBE 10 << 4 // Client Unsubscribe request
-#define MQTTUNSUBACK    11 << 4 // Unsubscribe Acknowledgment
-#define MQTTPINGREQ     12 << 4 // PING Request
-#define MQTTPINGRESP    13 << 4 // PING Response
-#define MQTTDISCONNECT  14 << 4 // Client is Disconnecting
-#define MQTTReserved    15 << 4 // Reserved
+#define MQTT_CLEAN_SESSION  1<<1
+#define MQTT_WILL_FLAG      1<<2
+#define MQTT_WILL_RETAIN    1<<5
+#define MQTT_USERNAME_FLAG  1<<7
+#define MQTT_PASSWORD_FLAG  1<<6
 
-#define MQTTQOS0 (0 << 1)
-#define MQTTQOS1 (1 << 1)
-#define MQTTQOS2 (2 << 1)
+#define _TCP_SOCK_OF_MQTT(mqtt) (&(mqtt)->s)
+#define _SOCK_OF_MQTT(mqtt) _TCP_SOCK(mqtt->socket_info)
 
-#define MQTT_STATE_INIT        0
-#define MQTT_STATE_WAIT_FOR_IF 1
-#define MQTT_STATE_SERVICE_UP  2
-#define MQTT_STATE_INIT_SOKET  3
-#define MQTT_STATE_WAIT_SOKET  4
-#define MQTT_STATE_CRIDIT      5
-#define MQTT_STATE_SUB         6
-#define MQTT_STATE_ACTIVE      7
-
-#define _TCP_SOCK_OF_MQTT(state) (&(state)->s)
-#define _SOCK_OF_MQTT(state) _TCP_SOCK(state->sock)
-
-typedef void (*mqttCallback)(far char*, uint8*, unsigned int);
-typedef struct mqttConnection {
-   char host[100];
-   word port;
-   char name[15];
-   char pass[20];
-   int state;
-   void* socket;
-   byte buffer[MQTT_MAX_PACKET_SIZE];
-   word nextMsgId;
-   longword lastOutActivity;
-   longword lastInActivity;
-   BOOLEAN pingOutstanding;
-   mqttCallback callback;
-   } mqttConnection;
-
-typedef void (*MqttCallback)(far char*, uint8*, unsigned int);
-typedef struct MqttState_t {
-   void* sock; // Currently pointing to tcp_Socket instance ('s') below.
+typedef struct {
+   void* socket_info; // Currently pointing to tcp_Socket instance ('s') below.
    tcp_Socket s;
-   char state;
+   int (*send)(void* socket_info, far const void* buf, unsigned int count);
    char host[DNS_MAX_NAME]; // Null-terminated dotted ip address or host name.
    word port;
-   char name[MQTT_MAXNAME]; // Null-terminated user name.
-   char pass[MQTT_MAXPASS]; // Null-terminated password.
-   MqttCallback callback;   // Called when message received.
-   byte buffer[MQTT_MAX_PACKET_SIZE];
-   word nextMsgId;
-   // longword lastOutActivity;
-   // longword lastInActivity;
-   longword epoch; // Session start time (MS_TIMER)
-   long rx_ka; // RX keepalive timer. Use this to send KAs to server if no
-               // messages sent in the interval.
-   long tx_ka; // TX keepalive timer. If no KAs received from server in this
-               // interval, can the connection.
-   BOOLEAN pingOutstanding;
-} MqttState;
+   // Connection info
+   char clientid[50];
+   // Auth fields
+   char username[MQTT_CONF_USERNAME_LENGTH];
+   char password[MQTT_CONF_PASSWORD_LENGTH];
+   // Will topic
+   uint8_t will_retain;
+   uint8_t will_qos;
+   uint8_t clean_session;
+   // Management fields
+   uint16_t seq;
+   uint16_t alive;
+} mqtt_broker_handle_t;
 
-typedef struct MqttState_t __far * MqttState_fp;
-typedef struct MqttState_t * MqttState_p;
-/*** EndHeader */
-
-/*** BeginHeader mqtt_Init */
-void mqtt_Init(MqttState_p s, char* host, word port, MqttCallback callback);
-/*** EndHeader  */
 /* START FUNCTION DESCRIPTION ********************************************
-mqtt_Init <MQTT.LIB>
-END DESCRIPTION **********************************************************/
-_mqtt_debug
-void mqtt_Init(MqttState_p s, char* host, word port, MqttCallback callback) {
-   auto tcp_Socket * sock = _TCP_SOCK_OF_MQTT(s);
+MQTTParseMessageType <MQTT.LIB>
 
-   _f_memset(s, 0, sizeof(*s));
-   s->sock = sock;
+SYNTAX:
+   uint8_t MQTTParseMessageType(buffer);
 
-   strncpy(s->host, host, DNS_MAX_NAME-1);
-   s->host[DNS_MAX_NAME-1] = '\0';
+SUMMARY:
+   Extract the message type from buffer.
 
-   s->port = port;
-   s->callback = callback;
-   }
-
-/*** BeginHeader mqtt_Connect */
-BOOLEAN mqtt_Connect(MqttState_p s, char *id, char *user, char *pass,
-      char* willTopic, uint8 willQos, uint8 willRetain, char* willMessage);
-/*** EndHeader  */
-/* START FUNCTION DESCRIPTION ********************************************
-mqtt_Connect <MQTT.LIB>
+DESCRIPTION
+   Implemented as a MACRO.
 
 PARAMETER1:
+   buffer - Pointer to the packet.
 
-PARAMETER2: The Client Identifier (Client ID) is between 1 and 23 characters
-            long, and uniquely identifies the client to the server. It must be
-            unique across all clients connecting to a single server, and is the
-            key in handling Message IDs messages with QoS levels 1 and 2. If the
-            Client ID contains more than 23 characters, the server responds to
-            the CONNECT message with a CONNACK return code 2: Identifier
-            Rejected.
+RETURN VALUE:
+   Message Type.
 
-PARAMETER3:
-PARAMETER4:
-PARAMETER5:
-PARAMETER6:
-PARAMETER7:
-PARAMETER8:
+END DESCRIPTION **********************************************************/
+#define MQTTParseMessageType(buffer) ( *buffer & 0xF0 )
+
+/* START FUNCTION DESCRIPTION ********************************************
+MQTTParseMessageDuplicate <MQTT.LIB>
+
+SYNTAX:
+   uint8_t MQTTParseMessageDuplicate(buffer);
+
+SUMMARY:
+   Indicate if it is a duplicate packet.
+
+DESCRIPTION
+   Implemented as a MACRO.
+
+PARAMETER1:
+   buffer - Pointer to the packet.
+
+RETURN VALUE:
+   0 Not duplicate.
+   !=0 Duplicate.
+
+END DESCRIPTION **********************************************************/
+#define MQTTParseMessageDuplicate(buffer) ( *buffer & 0x08 )
+
+/* START FUNCTION DESCRIPTION ********************************************
+MQTTParseMessageQos <MQTT.LIB>
+
+SYNTAX:
+   uint8_t MQTTParseMessageQos(buffer);
+
+SUMMARY:
+   Extract the message QoS level.
+
+DESCRIPTION
+   Implemented as a MACRO.
+
+PARAMETER1:
+   buffer - Pointer to the packet.
+
+RETURN VALUE:
+   QoS Level (0, 1 or 2).
+
+END DESCRIPTION **********************************************************/
+#define MQTTParseMessageQos(buffer) ( (*buffer & 0x06) >> 1 )
+
+/* START FUNCTION DESCRIPTION ********************************************
+MQTTParseMessageRetain <MQTT.LIB>
+
+SYNTAX:
+   uint8_t MQTTParseMessageRetain(buffer) ( *buffer & 0x01 );
+
+SUMMARY:
+   Indicate if this packet has a retain flag.
+
+DESCRIPTION
+   Implemented as a MACRO.
+
+PARAMETER1:
+   buffer - Pointer to the packet.
+
+RETURN VALUE:
+   0 Not duplicate.
+   !=0 Duplicate.
+
+END DESCRIPTION **********************************************************/
+#define MQTTParseMessageRetain(buffer) ( *buffer & 0x01 )
+/*** EndHeader */
+
+/*** BeginHeader mqtt_num_rem_len_bytes */
+uint8_t mqtt_num_rem_len_bytes(const uint8_t* buf);
+/*** EndHeader  */
+/* START FUNCTION DESCRIPTION ********************************************
+mqtt_num_rem_len_bytes <MQTT.LIB>
+
+SYNTAX:
+   uint8_t mqtt_num_rem_len_bytes(const uint8_t* buf);
+
+SUMMARY:
+   Parse packet buffer for number of bytes in remaining length field.
+
+DESCRIPTION:
+   Given a packet, return number of bytes in remaining length field in MQTT
+   fixed header. Can be from 1 - 4 bytes depending on length of message.
+
+PARAMETER1:
+   buf - Pointer to the packet.
+
+RETURN VALUE:
+   Number of bytes.
 
 END DESCRIPTION **********************************************************/
 _mqtt_debug
-BOOLEAN mqtt_Connect(MqttState_p s, char *id, char *user, char *pass,
-      char* willTopic, uint8 willQos, uint8 willRetain, char* willMessage)
-{
-   auto int status;
-   auto longword ip;
-   auto word lenId, lenUser, lenPass, lenWillTopic, lenWillMessage;
-   auto word bufsize, length, j;
-   auto byte connectFlags;
-   auto byte far * msg;
-   static uint8 d[9] = {0x00,0x06,'M','Q','I','s','d','p',MQTTPROTOCOLVERSION};
-
-   // sock_close(_SOCK_OF_MQTT(s));
-
-   // Reference to '_ip_delay2' has no corresponding prototype.
-   #define _ip_delay2 ip_delay2
-   //sock_wait_closed(_SOCK_OF_MQTT(s), 0, NULL, &status);
-
-   // Wait for interface to come up, just in case.
-   //while (ifpending(IF_DEFAULT) == IF_COMING_UP) {
-   //   tcp_tick(NULL);
-   //}
-
-   ip = resolve(s->host); // NOTE: this function blocks!
-   if (tcp_open(_SOCK_OF_MQTT(s), 0, ip, s->port, NULL)) {
-      s->nextMsgId = 1;
-
-      lenId = (id?strlen(id):0);
-      lenUser = (user?strlen(user):0);
-      lenPass = (pass?strlen(pass):0);
-      lenWillTopic = (willTopic?strlen(willTopic):0);
-      lenWillMessage = (willMessage?strlen(willMessage):0);
-
-      bufsize = 1                      // Header.
-              + 4                      // Remaining length.
-              + (2+strlen("MQIsdp"))   // Protocol Name.
-              + 1                      // Protocol Version Number.
-              + 1                      // Connect flags.
-              + 2                      // Keep Alive timer.
-              + (2+lenId);             // Client Identifier.
-
-      if (willTopic) {
-         bufsize += (2+lenWillTopic);   // Will Topic
-         bufsize += (2+lenWillMessage); // Will Message
-         connectFlags = 0x06|(willQos<<3)|(willRetain<<5);
-      } else {
-         connectFlags = 0x02;
-      }
-
-      if (user) {
-         bufsize += (2+lenUser);    // User Name.
-         connectFlags |= 0x80;
-         if (pass) {
-            bufsize += (2+lenPass); // Password.
-            connectFlags |= (0x80>>1);
+uint8_t mqtt_num_rem_len_bytes(const uint8_t* buf) {
+   uint8_t num_bytes = 1;
+   if ((buf[1] & 0x80) == 0x80) {
+      num_bytes++;
+      if ((buf[2] & 0x80) == 0x80) {
+         num_bytes ++;
+         if ((buf[3] & 0x80) == 0x80) {
+            num_bytes ++;
          }
       }
-
-      // Allocate buffer.
-      msg = malloc(bufsize);
-      // Leave room in the buffer for header and variable length field.
-      length = 5;
-
-      // Write protocol name and version.
-      for (j=0; j<9; j++) {
-         msg[length++] = d[j];
-      }
-
-      // Write connect flags.
-      msg[length++] = connectFlags;
-
-      // Write keep Alive timer.
-      msg[length++] = ((MQTT_KEEPALIVE) >> 8);
-      msg[length++] = ((MQTT_KEEPALIVE) & 0xFF);
-
-      // The payload contains one or more UTF-8 encoded strings. They specify a
-      // unqiue identifier for the client, a Will topic and message and the User
-      // Name and Password to use. All but the first are optional and their
-      // presence is determined based on flags in the variable header.
-      msg[length++] = (lenId >> 8);
-      msg[length++] = (lenId & 0xFF);
-      _f_memcpy(&msg[length], id, lenId);
-      length += lenId;
-
-      // TODO: REFACTORING!!!
-      if (willTopic) {
-         msg[length++] = (lenWillTopic >> 8);
-         msg[length++] = (lenWillTopic & 0xFF);
-         _f_memcpy(&msg[length], willTopic, lenWillTopic);
-         length += lenWillTopic;
-
-         msg[length++] = (lenWillMessage >> 8);
-         msg[length++] = (lenWillMessage & 0xFF);
-         _f_memcpy(&msg[length], willMessage, lenWillMessage);
-         length += lenWillMessage;
-      }
-
-      if(user) {
-         msg[length++] = (lenUser >> 8);
-         msg[length++] = (lenUser & 0xFF);
-         _f_memcpy(&msg[length], user, lenUser);
-         length += lenUser;
-         if(pass) {
-            msg[length++] = (lenPass >> 8);
-            msg[length++] = (lenPass & 0xFF);
-            _f_memcpy(&msg[length], pass, lenPass);
-            length += lenPass;
-         }
-      }
-
-      mqtt_Write(s, MQTTCONNECT, msg, length-5);
-      //lastInActivity = lastOutActivity = millis();
-
-      //while (!_client->available()) {
-      //   unsigned long t = millis();
-      //   if (t-lastInActivity > MQTT_KEEPALIVE*1000UL) {
-      //      _client->stop();
-      //      return FALSE;
-      //   }
-      //}
-      //uint8_t llen;
-      //uint16_t len = readPacket(&llen);
-
-      //if (len == 4 && buffer[3] == 0) {
-      //   lastInActivity = millis();
-      //   pingOutstanding = false;
-      //   return TRUE;
-      //}
-      //_client->stop();
-   } // if (tcp_open...
-   return FALSE;
-
-sock_err:
-   switch(status) {
-      case 1: /* foreign host closed */
-      printf("User closed session\n");
-      break;
-   case -1: /* time-out */
-      printf("\nConnection timed out\n");
-      break;
    }
-   return FALSE;
+   return num_bytes;
 }
 
-/*** BeginHeader mqtt_Handler */
-void mqtt_Handler(MqttState __far * s);
+/*** BeginHeader mqtt_parse_rem_len */
+uint16_t mqtt_parse_rem_len(const uint8_t* buf);
 /*** EndHeader  */
-void mqtt_Handler(MqttState __far * s) {
-   // TODO: Handler, see modbus_slave.lib for inspiration.
-}
+/* START FUNCTION DESCRIPTION ********************************************
+mqtt_parse_rem_len <MQTT.LIB>
 
-/*** BeginHeader _mqtt_getElapsed */
-char * _mqtt_getElapsed(MqttState __far * s);
-/*** EndHeader  */
+SYNTAX:
+   uint16_t mqtt_parse_rem_len(const uint8_t* buf);
+
+SUMMARY:
+   Parse packet buffer for remaning length value.
+
+DESCRIPTION:
+   Given a packet, return remaining length value (in fixed header).
+
+PARAMETER1:
+   buf - Pointer to the packet.
+
+RETURN VALUE:
+   Remaining length.
+
+END DESCRIPTION **********************************************************/
 _mqtt_debug
-char * _mqtt_getElapsed(MqttState __far * s) {
-   static char stamp[20];
-   longword ms = MS_TIMER - s->epoch;
-   sprintf(stamp, "%06lu.%02u", ms / 1000, (word)(ms % 1000 / 10));
-   return stamp;
-}
+uint16_t mqtt_parse_rem_len(const uint8_t* buf) {
+   uint16_t multiplier = 1;
+   uint16_t value = 0;
+   uint8_t digit;
 
-/*** BeginHeader mqtt_Write */
-int mqtt_Write(MqttState_p s, byte header, void __far * msg, word len);
-/*** EndHeader  */
-_mqtt_debug
-int mqtt_Write(MqttState_p s, byte header, void __far * msg, word len)
-{
-   auto int wr;
-   auto byte digit;
-   auto byte lenBuf[4]; // Will represent the number of bytes remaining within
-                        // the current message, including data in the variable
-                        // header and the payload. The protocol limits the
-                        // number of bytes in the representation to a maximum of
-                        // four.
-   auto word pos = 0;
-   auto byte llen = 0;  // Actual number of bytes in the representation.
+   buf++; // skip "flags" byte in fixed header
 
-   // The table below shows the Remaining Length values represented by
-   // increasing numbers of bytes.
-   // +--------+------------------------------+--------------------------------+
-   // | Digits |             From             |               To               |
-   // +--------+------------------------------+--------------------------------+
-   // |   1    | 0 (0x00)                     | 127 (0x7F)                     |
-   // +--------+------------------------------+--------------------------------+
-   // |   2    | 2,128 (0x80, 0x01)           | 16,383 (0xFF, 0x7F)            |
-   // +--------+------------------------------+--------------------------------+
-   // |   3    | 16,384 (0x80, 0x80, 0x01)    | 2,097,151 (0xFF, 0xFF, 0x7F)   |
-   // +--------+------------------------------+--------------------------------+
-   // |   4    | 2,097,152 (0x80, 0x80, 0x80, | 268,435,455 (0xFF, 0xFF, 0xFF, |
-   // |        | 0x01)                        | 0x7F)                          |
-   // +--------+------------------------------+--------------------------------+
-   auto word X = len;
-   // The algorithm for encoding a decimal number (X) into the variable length
-   // encoding scheme is as follows.
    do {
-      digit = X % 128;
-      X = X / 128;
-      if (X > 0) {
-         digit |= 0x80;
-      }
-      lenBuf[pos++] = digit;
-      llen++;
-   } while(X>0);
-
-   tcp_tick(NULL);
-   wr = sock_writable(_SOCK_OF_MQTT(s));
-   if (!wr) {
-      // _mqtt_handle_error(_SOCK_OF_MQTT(s), 4); // TODO: Implement.
-      return -EIO;
-   }
-
-   --wr;
-   if ((word)wr < len+llen) {
-      return -EAGAIN;
-   }
-
-#if MQTT_VERBOSE > 2
-   #if MQTT_VERBOSE == 3
-   if (TRUE) {
-   #endif
-   printf("\n%s --> MQTT: sending message\n", _mqtt_getElapsed(s));
-   printf("  header=0x%02X\n", header);
-   printf("  len=%u\n", len);
-   mem_dump(msg, len+5);
-   printf("\n");
-   #if MQTT_VERBOSE == 3
-   }
-   #endif
-#endif
-
-   sock_noflush(_SOCK_OF_MQTT(s));
-   sock_fastwrite(_SOCK_OF_MQTT(s), (char __far *)&header, 1);
-   sock_fastwrite(_SOCK_OF_MQTT(s), (char __far *)lenBuf, llen);
-   if (len) {
-      sock_fastwrite(_SOCK_OF_MQTT(s), msg, len);
-   }
-   sock_flush(_SOCK_OF_MQTT(s));
-   s->rx_ka = _SET_TIMEOUT(MQTT_KEEPALIVE*1000UL);
-   return 0;
-}
-
-/*** BeginHeader mqttHandleMessage*/
-void mqttHandleMessage(mqttConnection *conn, char * msg);
-/*** EndHeader */
-void mqttHandleMessage(mqttConnection *conn, char * msg) {
-   char *header;
-   char *rest;
-   char *body;
-   char *dist;
-   if (*msg=='\n')
-      msg++;
-   header=msg;
-   rest=strchr(msg,'\n');
-   if (rest!=NULL) {
-      *rest='\0';
-      rest++;
-      body=strstr(rest,"\n\n");
-      if (body!=NULL) {
-         body+=2;
-         if (strcmp(header,"MESSAGE")==0) {
-            dist=strstr(rest,"destination:");
-            if (dist!=NULL) {
-               rest=strchr(dist,'\n');
-               *rest='\0';
-               (*(conn->onMessage))(dist+strlen("destination:"),body);
-            }
-         }
-      }
-   }
-}
-
-/*** BeginHeader mqttReadPacket*/
-uint16 mqttReadPacket(MqttState __far * s, char * msg);
-/*** EndHeader */
-/*
-The message header for each MQTT command message contains a fixed header.
-The table below shows the fixed header format.
-+--------+---+---+---+---+----------+-----+-----+--------+
-|  bit   | 7 | 6 | 5 | 4 |    3     |  2  |  1  |    0   |
-+--------+---+---+---+---+----------+-----+-----+--------+
-| byte 1 |  Message Type | DUP flag | QoS level | RETAIN |
-+--------+---------------+----------+-----------+--------+
-| byte 2 |               Remaining Length                |
-+--------+-----------------------------------------------+
-
-Byte 1
-   Contains the Message Type and Flags (DUP, QoS level, and RETAIN) fields.
-Byte 2
-   (At least one byte) contains the Remaining Length field.
-
-*/
-uint16 mqttReadPacket(MqttState __far * s, uint8* lengthLength) {
-   uint16 len, length, i;
-   uint8 digit, multiplier;
-
-   // Byte 1 contains the Message Type and Flags (DUP, QoS level, and RETAIN)
-   // fields.
-   len = 0;
-   s->buffer[len++] = sock_getc(_SOCK_OF_MQTT(s)); // NOTE: this function blocks.
-
-   // Byte 2 (at least one byte) contains the Remaining Length field.
-   // The variable length encoding scheme uses a single byte for messages up to
-   // 127 bytes long. Longer messages are handled as follows. Seven bits of each
-   // byte encode the Remaining Length data, and the eighth bit indicates any
-   // following bytes in the representation. Each byte encodes 128 values and a
-   // "continuation bit". For example, the number 64 decimal is encoded as a
-   // single byte, decimal value 64, hex 0x40. The number 321 decimal
-   // (= 65 + 2*128) is encoded as two bytes, least significant first. The first
-   // byte 65+128 = 193. Note that the top bit is set to indicate at least one
-   // following byte. The second byte is 2.
-   digit = 0;
-   length = 0;
-   multiplier = 1;
-   do {
-      digit = sock_getc(_SOCK_OF_MQTT(s));
-      s->buffer[len++] = digit;
-      length += (digit & 127) * multiplier;
+      digit = *buf;
+      value += (digit & 127) * multiplier;
       multiplier *= 128;
+      buf++;
    } while ((digit & 128) != 0);
 
-   *lengthLength = len-1;
+   return value;
+}
 
-   for (i = 0;i<length;i++) {
-      if (len < MQTT_MAX_PACKET_SIZE) {
-         s->buffer[len++] = sock_getc(_SOCK_OF_MQTT(s));
+/*** BeginHeader mqtt_parse_msg_id */
+uint8_t mqtt_parse_msg_id(const uint8_t* buf);
+/*** EndHeader  */
+/* START FUNCTION DESCRIPTION ********************************************
+mqtt_parse_msg_id <MQTT.LIB>
+
+SYNTAX:
+   uint8_t mqtt_parse_msg_id(const uint8_t* buf);
+
+SUMMARY:
+   Parse packet buffer for message id.
+
+PARAMETER1:
+   buf - Pointer to the packet.
+
+RETURN VALUE:
+   Message id.
+
+END DESCRIPTION **********************************************************/
+_mqtt_debug
+uint8_t mqtt_parse_msg_id(const uint8_t* buf) {
+   uint8_t type = MQTTParseMessageType(buf);
+   uint8_t qos = MQTTParseMessageQos(buf);
+   uint8_t id = 0;
+
+   if(type >= MQTT_MSG_PUBLISH && type <= MQTT_MSG_UNSUBACK) {
+      if(type == MQTT_MSG_PUBLISH) {
+         if(qos != 0) {
+            // fixed header length + Topic (UTF encoded)
+            // = 1 for "flags" byte + rlb for length bytes + topic size
+            uint8_t rlb = mqtt_num_rem_len_bytes(buf);
+            uint8_t offset = *(buf+1+rlb)<<8; // topic UTF MSB
+            offset |= *(buf+1+rlb+1);         // topic UTF LSB
+            offset += (1+rlb+2);              // fixed header + topic size
+            id = *(buf+offset)<<8;            // id MSB
+            id |= *(buf+offset+1);            // id LSB
+         }
       } else {
-         sock_getc(_SOCK_OF_MQTT(s));
-         len = 0; // This will cause the packet to be ignored.
+         // fixed header length
+         // 1 for "flags" byte + rlb for length bytes
+         uint8_t rlb = mqtt_num_rem_len_bytes(buf);
+         id = *(buf+1+rlb)<<8;        // id MSB
+         id |= *(buf+1+rlb+1);        // id LSB
       }
    }
+   return id;
+}
 
+/*** BeginHeader mqtt_parse_pub_topic */
+uint16_t mqtt_parse_pub_topic(const uint8_t* buf, uint8_t* topic);
+/*** EndHeader  */
+/* START FUNCTION DESCRIPTION ********************************************
+mqtt_parse_pub_topic <MQTT.LIB>
+
+SYNTAX:
+   uint16_t mqtt_parse_pub_topic(const uint8_t* buf, uint8_t* topic);
+
+SUMMARY:
+   Parse a packet buffer for the publish topic.
+
+DESCRIPTION:
+   Given a packet containing an MQTT publish message,
+   return the message topic.
+
+PARAMETER1:
+   buf - Pointer to the packet.
+PARAMETER2:
+   topic - Pointer destination buffer for topic.
+
+RETURN VALUE:
+   Size in bytes of topic (0 = no publish message in buffer).
+
+END DESCRIPTION **********************************************************/
+_mqtt_debug
+uint16_t mqtt_parse_pub_topic(const uint8_t* buf, uint8_t* topic) {
+   const uint8_t* ptr;
+   uint16_t topic_len = mqtt_parse_pub_topic_ptr(buf, &ptr);
+
+   if(topic_len != 0 && ptr != NULL) {
+      memcpy(topic, ptr, topic_len);
+   }
+
+   return topic_len;
+}
+
+/*** BeginHeader mqtt_parse_pub_topic_ptr */
+uint16_t mqtt_parse_pub_topic_ptr(const uint8_t* buf, const uint8_t **topic_ptr);
+/*** EndHeader  */
+/** Parse a packet buffer for a pointer to the publish topic.
+ *
+ *  Not called directly - called by mqtt_parse_pub_topic
+ */
+_mqtt_debug
+uint16_t mqtt_parse_pub_topic_ptr(const uint8_t* buf, const uint8_t **topic_ptr) {
+   uint16_t len = 0;
+
+   if(MQTTParseMessageType(buf) == MQTT_MSG_PUBLISH) {
+      // Fixed header length = 1 for "flags" byte + rlb for length bytes.
+      uint8_t rlb = mqtt_num_rem_len_bytes(buf);
+      len = *(buf+1+rlb)<<8;	// MSB of topic UTF
+      len |= *(buf+1+rlb+1);	// LSB of topic UTF
+      // Start of topic = add 1 for "flags", rlb for remaining length, 2 for UTF.
+      *topic_ptr = (buf + (1+rlb+2));
+   } else {
+      *topic_ptr = NULL;
+   }
    return len;
 }
 
-/*** BeginHeader mqttLoop*/
-BOOLEAN mqttLoop(MqttState __far * s);
-/*** EndHeader */
-BOOLEAN mqttLoop(MqttState __far * s) {
-   auto longword t;
-   auto uint8 llen, type;
-   auto uint16 len, tl, i;
-   auto __far char *payload;
-   auto __far char *topic;
-   // TODO: Verify connection?
-   // if (!connected) return FALSE; // Or something...
-   tcp_tick(_SOCK_OF_MQTT(s));
+/*** BeginHeader mqtt_parse_publish_msg */
+uint16_t mqtt_parse_publish_msg(const uint8_t* buf, uint8_t* msg);
+/*** EndHeader  */
+/* START FUNCTION DESCRIPTION ********************************************
+mqtt_parse_publish_msg <MQTT.LIB>
 
-   // The client sends a PINGREQ packet if it hasn't received anything from the
-   // server within the KA interval.
-   if (_CHK_TIMEOUT(s->rx_ka) || _CHK_TIMEOUT(s->tx_ka)) {
-      if (s->pingOutstanding) {
-         // _client->stop(); // <- ???
-         return FALSE;
-      } else {
-         s->buffer[0] = MQTTPINGREQ;
-         s->buffer[1] = '\0';
-         sock_fastwrite(_SOCK_OF_MQTT(s),s->buffer,2); // TODO: check ret. value
-         s->rx_ka = _SET_TIMEOUT(MQTT_KEEPALIVE*1000UL);
-         s->tx_ka = _SET_TIMEOUT(MQTT_KEEPALIVE*1000UL);
+SYNTAX:
+   uint16_t mqtt_parse_publish_msg(const uint8_t* buf, uint8_t* msg);
 
-         s->pingOutstanding = TRUE;
-      }
-   }
+SUMMARY:
+   Parse a packet buffer for the publish message.
 
-   if (sock_bytesready(_SOCK_OF_MQTT(s)) > 0) {
-      len = mqttReadPacket(s, &llen);
-      if (len > 0) {
-         s->tx_ka = _SET_TIMEOUT(MQTT_KEEPALIVE*1000UL);
-         type = s->buffer[0]&0xF0;
-         if (type == MQTTPUBLISH) {
-            if (s->callback) {
-               tl = (s->buffer[llen+1]<<8)+s->buffer[llen+2];
-               topic = malloc(tl+1);
-               _f_memcpy(topic, &s->buffer[llen+3], tl);
-               topic[tl] = '\0';
-               // ignore msgID - only support QoS 0 subs
-               payload = s->buffer+llen+3+tl;
-               s->callback(topic,payload,len-llen-3-tl);
-               free(topic);
-            }
-         } else if (type == MQTTPINGREQ) {
-            s->buffer[0] = MQTTPINGRESP;
-            s->buffer[1] = '\0';
-            i = sock_fastwrite(_SOCK_OF_MQTT(s), s->buffer, 2);
-            sock_flush(_SOCK_OF_MQTT(s));
-         } else if (type == MQTTPINGRESP) {
-            s->pingOutstanding = FALSE;
-         }
-      }
-   }
-   return TRUE;
-   return FALSE; // <- If not connected?
-}
-/*** BeginHeader mqttTick*/
-void mqttTick(mqttConnection *conn);
-/*** EndHeader */
-void mqttTick(mqttConnection *conn) {
-   static char msg[800];
-   static int p;
-   int i;
-   char buffer[200];
-   int bytes_read;
+DESCRIPTION:
+   Given a packet containing an MQTT publish message,
+   return the message.
 
-   tcp_tick(conn->socket);
-   if (p<0 || p>800) {
-      p=0;
-   }
-   bytes_read=sock_fastread(conn->socket,buffer,sizeof(buffer)-1);
+PARAMETER1:
+   buf - Pointer to the packet.
+PARAMETER2:
+   topic - Pointer destination buffer for message.
 
-   if(bytes_read>0) {
-      for (i=0;i<bytes_read;i++){
-         if (buffer[i]!=0) {
-            if (p>sizeof(msg)) {
-               p=0;
-            }
-            msg[p]=buffer[i];
-            p++;
-         } else {
-            msg[p]='\0';
-            stompHandleMessage(conn, msg);
-            p=0;
-         }
-      }
-      buffer[bytes_read]=0;
-   }
+RETURN VALUE:
+   Size in bytes of topic (0 = no publish message in buffer).
+
+END DESCRIPTION **********************************************************/
+_mqtt_debug
+uint16_t mqtt_parse_publish_msg(const uint8_t* buf, uint8_t* msg) {
+	const uint8_t* ptr;
+
+	//printf("mqtt_parse_publish_msg\n");
+
+	uint16_t msg_len = mqtt_parse_pub_msg_ptr(buf, &ptr);
+
+	if(msg_len != 0 && ptr != NULL) {
+		memcpy(msg, ptr, msg_len);
+	}
+
+	return msg_len;
 }
 
-/*** BeginHeader mqttPublish*/
-BOOLEAN mqttPublish(mqttConnection *conn, char* topic, uint8* payload,
-      unsigned int plength, BOOLEAN retained);
-/*** EndHeader */
-BOOLEAN mqttConnected(mqttConnection *conn) { return TRUE; }
-BOOLEAN mqttPublish(mqttConnection *conn, char* topic, uint8* payload,
-      unsigned int plength, BOOLEAN retained) {
-   auto uint16 length, i;
-   auto uint8 header
-   if (mqttConnected(conn)) {
-      // Leave room in the buffer for header and variable length field.
-      length = 5;
-      length = _mqttWriteString(topic, conn->buffer, length);
-      for (i=0; i<plength; i++) {
-         conn->buffer[length++] = payload[i];
+/*** BeginHeader mqtt_parse_pub_msg_ptr */
+uint16_t mqtt_parse_pub_msg_ptr(const uint8_t* buf, const uint8_t **msg_ptr);
+/*** EndHeader  */
+/** Parse a packet buffer for a pointer to the publish message.
+ *
+ *  Not called directly - called by mqtt_parse_pub_msg
+ */
+_mqtt_debug
+uint16_t mqtt_parse_pub_msg_ptr(const uint8_t* buf, const uint8_t **msg_ptr) {
+   uint16_t len = 0;
+
+   if(MQTTParseMessageType(buf) == MQTT_MSG_PUBLISH) {
+      // message starts at
+      // fixed header length + Topic (UTF encoded) + msg id (if QoS>0)
+      uint8_t rlb = mqtt_num_rem_len_bytes(buf);
+      uint8_t offset = (*(buf+1+rlb))<<8;  // topic UTF MSB
+      offset |= *(buf+1+rlb+1);            // topic UTF LSB
+      offset += (1+rlb+2);                 // fixed header + topic size
+
+      if(MQTTParseMessageQos(buf)) {
+         offset += 2;                      // add two bytes of msg id
       }
-      header = MQTTPUBLISH;
-      if (retained) {
-         header |= 1;
-      }
-      return write(header, conn->buffer, length-5);
+
+      *msg_ptr = (buf + offset);
+
+      // offset is now pointing to start of message
+      // length of the message is remaining length - variable header
+      // variable header is offset - fixed header
+      // fixed header is 1 + rlb
+      // so, lom = remlen - (offset - (1+rlb))
+      len = mqtt_parse_rem_len(buf) - (offset-(rlb+1));
+   } else {
+      *msg_ptr = NULL;
    }
-   return FALSE;
+   return len;
+}
+
+/*** BeginHeader mqtt_init */
+void mqtt_init(mqtt_broker_handle_t* broker, const char* clientid);
+/*** EndHeader  */
+/* START FUNCTION DESCRIPTION ********************************************
+mqtt_init <MQTT.LIB>
+
+SYNTAX:
+   void mqtt_init(mqtt_broker_handle_t* broker, const char* clientid);
+
+DESCRIPTION:
+   Initialize the information to connect to the broker.
+
+PARAMETER1:
+   broker - Data structure that contains the connection information
+   with the broker.
+PARAMETER2:
+   clientid - A string that identifies the client id.
+
+END DESCRIPTION **********************************************************/
+_mqtt_debug
+void mqtt_init(mqtt_broker_handle_t* broker, const char* clientid) {
+   memset(broker, 0, sizeof(broker));
+   // Socket info.
+   broker->socket_info = _TCP_SOCK_OF_MQTT(broker);
+   // Connection options
+   broker->alive = 300; // 300 seconds = 5 minutes
+   broker->seq = 1; // Sequency for message indetifiers
+   // Client options
+   if(clientid) {
+      strncpy(broker->clientid, clientid, sizeof(broker->clientid));
+   } else {
+      strcpy(broker->clientid, "emqtt");
+   }
+   // Will topic
+   broker->clean_session = 1;
+}
+
+/*** BeginHeader mqtt_init_auth */
+void mqtt_init_auth(mqtt_broker_handle_t* broker, const char* username, const char* password);
+/*** EndHeader  */
+/* START FUNCTION DESCRIPTION ********************************************
+mqtt_init_auth <MQTT.LIB>
+
+SYNTAX:
+   void mqtt_init_auth(mqtt_broker_handle_t* broker, const char* username, const char* password);
+
+DESCRIPTION:
+   Enable the authentication to connect to the broker.
+
+PARAMETER1:
+   broker - Data structure that contains the connection information
+   with the broker.
+PARAMETER2:
+   username - A string that contains the username.
+PARAMETER3:
+   password - A string that contains the password.
+
+NOTE:
+   Only has effect before to call mqtt_connect.
+
+END DESCRIPTION **********************************************************/
+_mqtt_debug
+void mqtt_init_auth(mqtt_broker_handle_t* broker, const char* username, const char* password) {
+   if(username && username[0] != '\0')
+      strncpy(broker->username, username, sizeof(broker->username)-1);
+   if(password && password[0] != '\0')
+      strncpy(broker->password, password, sizeof(broker->password)-1);
+}
+
+/*** BeginHeader mqtt_set_alive */
+void mqtt_set_alive(mqtt_broker_handle_t* broker, uint16_t alive);
+/*** EndHeader  */
+/* START FUNCTION DESCRIPTION ********************************************
+mqtt_set_alive <MQTT.LIB>
+
+SYNTAX:
+   void mqtt_set_alive(mqtt_broker_handle_t* broker, uint16_t alive);
+
+DESCRIPTION:
+   Set the keep alive timer.
+
+PARAMETER1:
+   broker - Data structure that contains the connection information
+   with the broker.
+PARAMETER2:
+   alive - Keep aliver timer value (in seconds).
+
+NOTE:
+   Only has effect before to call mqtt_connect.
+
+END DESCRIPTION **********************************************************/
+_mqtt_debug
+void mqtt_set_alive(mqtt_broker_handle_t* broker, uint16_t alive) {
+   broker->alive = alive;
+}
+
+/*** BeginHeader mqtt_connect */
+int mqtt_connect(mqtt_broker_handle_t* broker);
+/*** EndHeader  */
+/* START FUNCTION DESCRIPTION ********************************************
+mqtt_connect <MQTT.LIB>
+
+SYNTAX:
+   int mqtt_connect(mqtt_broker_handle_t* broker);
+
+DESCRIPTION:
+   Connect to the broker.
+
+PARAMETER1:
+   broker - Data structure that contains the connection information
+   with the broker.
+
+RETURN VALUE:
+    1 On success.
+    0 On connection error.
+   -1 On IO error.
+
+END DESCRIPTION **********************************************************/
+_mqtt_debug
+int mqtt_connect(mqtt_broker_handle_t* broker)
+{
+   auto int rc;
+   auto uint8_t flags = 0x00;
+
+   auto uint16_t clientidlen;
+   auto uint16_t usernamelen;
+   auto uint16_t passwordlen;
+   auto uint16_t payload_len;
+
+   auto uint8_t var_header[12] = {
+      0x00,0x06,
+      0x4d,0x51,0x49,0x73,0x64,0x70, // Protocol name: MQIsdp.
+      MQTT_PROTOCOL_VERSION          // Protocol version.
+   };
+
+   auto uint8_t fixedHeaderSize;
+   auto uint8_t remainLen;
+
+   auto uint16_t offset;
+   auto uint16_t packetSize;
+
+   auto far uint8_t *fixed_header;
+   auto far uint8_t *packet;
+
+   clientidlen = strlen(broker->clientid);
+   usernamelen = strlen(broker->username);
+   passwordlen = strlen(broker->password);
+   payload_len = clientidlen + 2;
+
+   // Preparing the flags.
+   if(usernamelen) {
+      payload_len += usernamelen + 2;
+      flags |= MQTT_USERNAME_FLAG;
+   }
+   if(passwordlen) {
+      payload_len += passwordlen + 2;
+      flags |= MQTT_PASSWORD_FLAG;
+   }
+   if(broker->clean_session) {
+      flags |= MQTT_CLEAN_SESSION;
+   }
+
+   // Variable header.
+   var_header[9] = flags;
+   var_header[10] = broker->alive>>8;
+   var_header[11] = broker->alive&0xFF;
+
+   // Fixed header.
+   fixedHeaderSize = 2;  // Default size = one byte Message Type
+                         // + one byte Remaining Length.
+   remainLen = sizeof(var_header)+payload_len;
+   if (remainLen > 127) {
+      fixedHeaderSize++; // add an additional byte for Remaining Length.
+   }
+   fixed_header = malloc(fixedHeaderSize);
+
+   // Message Type
+   fixed_header[0] = MQTT_MSG_CONNECT;
+
+   // Remaining Length
+   if (remainLen <= 127) {
+      fixed_header[1] = remainLen;
+   } else {
+        // first byte is remainder (mod) of 128, then set the MSB to indicate more bytes
+        fixed_header[1] = remainLen % 128;
+        fixed_header[1] = fixed_header[1] | 0x80;
+        // second byte is number of 128s
+        fixed_header[2] = remainLen / 128;
+    }
+
+   offset = 0;
+   packetSize = fixedHeaderSize + sizeof(var_header) + payload_len;
+   packet =  malloc(packetSize);
+   _f_memset(packet, 0, packetSize);
+   _f_memcpy(packet, fixed_header, fixedHeaderSize);
+   free(fixed_header);
+   offset += fixedHeaderSize;
+   _f_memcpy(packet+offset, var_header, sizeof(var_header));
+   offset += sizeof(var_header);
+   // Client ID - UTF encoded
+   packet[offset++] = clientidlen>>8;
+   packet[offset++] = clientidlen&0xFF;
+   _f_memcpy(packet+offset, broker->clientid, clientidlen);
+   offset += clientidlen;
+
+   if(usernamelen) {
+      // Username - UTF encoded
+      packet[offset++] = usernamelen>>8;
+      packet[offset++] = usernamelen&0xFF;
+      _f_memcpy(packet+offset, broker->username, usernamelen);
+      offset += usernamelen;
+   }
+
+   if(passwordlen) {
+      // Password - UTF encoded
+      packet[offset++] = passwordlen>>8;
+      packet[offset++] = passwordlen&0xFF;
+      _f_memcpy(packet+offset, broker->password, passwordlen);
+      offset += passwordlen;
+   }
+
+   // Send the packet
+   if(broker->send(_SOCK_OF_MQTT(broker), packet, packetSize) < packetSize) {
+      rc = -1;
+   } else {
+      rc = 1;
+   }
+   free(packet);
+   return rc;
+}
+
+/*** BeginHeader send_packet */
+int send_packet(void* socket_info, far const void* buf, unsigned int count);
+/*** EndHeader  */
+/* START FUNCTION DESCRIPTION ********************************************
+send_packet <MQTT.LIB>
+END DESCRIPTION **********************************************************/
+_mqtt_debug
+int send_packet(void* socket_info, far const void* buf, unsigned int count) {
+   int fd = *((int*)socket_info);
+   return send(fd, buf, count, 0);
+}
+
+/*** BeginHeader init_socket */
+int init_socket(mqtt_broker_handle_t* broker, const char* hostname, short port);
+/*** EndHeader  */
+/* START FUNCTION DESCRIPTION ********************************************
+init_socket <MQTT.LIB>
+END DESCRIPTION **********************************************************/
+_mqtt_debug
+int init_socket(mqtt_broker_handle_t* broker, const char* hostname, short port) {
+   auto longword ip;
+   auto int flag = 1;
+   auto int keepalive = 3; // Seconds
+
+   if(hostname && hostname[0] != '\0') {
+      strncpy(broker->host, hostname, sizeof(broker->host)-1);
+   }
+   broker->port = port;
+
+   // TODO: Create the socket?
+
+   // Disable Nagle Algorithm
+   tcp_set_nonagle(_SOCK_OF_MQTT(broker));
+
+   ip = resolve(broker->host); // NOTE: this function blocks!
+   if (!tcp_open(_SOCK_OF_MQTT(broker), 0, ip, broker->port, NULL)) {
+      return -1;
+   }
+   // MQTT stuffs.
+   mqtt_set_alive(broker, keepalive);
+   broker->send = send_packet;
+
+   return ENONE;
+}
+
+/*** BeginHeader close_socket */
+int close_socket(mqtt_broker_handle_t* broker);
+/*** EndHeader  */
+/* START FUNCTION DESCRIPTION ********************************************
+close_socket <MQTT.LIB>
+END DESCRIPTION **********************************************************/
+_mqtt_debug
+int close_socket(mqtt_broker_handle_t* broker) {
+   int fd = *((int*)broker->socket_info);
+   return close(fd);
+}
+
+/*** BeginHeader read_packet */
+int read_packet(int timeout);
+/*** EndHeader  */
+/* START FUNCTION DESCRIPTION ********************************************
+read_packet <MQTT.LIB>
+END DESCRIPTION **********************************************************/
+int read_packet(int timeout) {
+   if(timeout > 0) {
+      fd_set readfds;
+      struct timeval tmv;
+
+      // Initialize the file descriptor set
+      FD_ZERO (&readfds);
+      FD_SET (socket_id, &readfds);
+
+      // Initialize the timeout data structure
+      tmv.tv_sec = timeout;
+      tmv.tv_usec = 0;
+
+      // select returns 0 if timeout, 1 if input available, -1 if error
+      if(select(1, &readfds, NULL, NULL, &tmv)) {
+         return -2;
+      }
+   }
+
+   int total_bytes = 0, bytes_rcvd, packet_length;
+   memset(packet_buffer, 0, sizeof(packet_buffer));
+
+   // Reading fixed header
+   while(total_bytes < 2) {
+      if((bytes_rcvd = recv(socket_id, (packet_buffer+total_bytes), RCVBUFSIZE - total_bytes, 0)) <= 0) {
+         return -1;
+      }
+      total_bytes += bytes_rcvd; // Keep tally of total bytes
+   }
+
+   packet_length = packet_buffer[1] + 2; // Remaining length + fixed header length
+
+   // Reading the packet
+   while(total_bytes < packet_length) {
+      if((bytes_rcvd = recv(socket_id, (packet_buffer+total_bytes), RCVBUFSIZE - total_bytes, 0)) <= 0) {
+         return -1;
+      }
+      total_bytes += bytes_rcvd; // Keep tally of total bytes
+   }
+
+   return packet_length;
 }
 
 /*** BeginHeader */
