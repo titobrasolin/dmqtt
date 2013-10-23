@@ -706,6 +706,451 @@ int mqtt_connect(mqtt_broker_handle_t* broker)
    return rc;
 }
 
+/*** BeginHeader mqtt_disconnect */
+int mqtt_disconnect(mqtt_broker_handle_t* broker);
+/*** EndHeader  */
+/* START FUNCTION DESCRIPTION ********************************************
+mqtt_disconnect <MQTT.LIB>
+
+SYNTAX:
+   int mqtt_disconnect(mqtt_broker_handle_t* broker);
+
+DESCRIPTION:
+   Disconnect to the broker.
+
+PARAMETER1:
+   broker - Data structure that contains the connection information
+   with the broker.
+
+RETURN VALUE:
+    1 On success.
+    0 On connection error.
+   -1 On IO error.
+
+END DESCRIPTION **********************************************************/
+_mqtt_debug
+int mqtt_disconnect(mqtt_broker_handle_t* broker) {
+   auto uint8_t packet[] = {
+      MQTT_MSG_DISCONNECT, // Message Type, DUP flag, QoS level, Retain
+      0x00                 // Remaining length
+   };
+
+   // Send the packet
+   if(broker->send(_SOCK_OF_MQTT(broker), packet, sizeof(packet)) < sizeof(packet)) {
+      return -1;
+   }
+   return 1;
+}
+
+/*** BeginHeader mqtt_ping */
+int mqtt_ping(mqtt_broker_handle_t* broker);
+/*** EndHeader  */
+/* START FUNCTION DESCRIPTION ********************************************
+mqtt_ping <MQTT.LIB>
+
+SYNTAX:
+   int mqtt_ping(mqtt_broker_handle_t* broker);
+
+DESCRIPTION:
+   Make a ping.
+
+PARAMETER1:
+   broker - Data structure that contains the connection information
+   with the broker.
+
+RETURN VALUE:
+    1 On success.
+    0 On connection error.
+   -1 On IO error.
+
+END DESCRIPTION **********************************************************/
+_mqtt_debug
+int mqtt_ping(mqtt_broker_handle_t* broker) {
+   auto uint8_t packet[] = {
+      MQTT_MSG_PINGREQ, // Message Type, DUP flag, QoS level, Retain
+      0x00              // Remaining length
+   };
+
+   // Send the packet
+   if(broker->send(_SOCK_OF_MQTT(broker), packet, sizeof(packet)) < sizeof(packet)) {
+      return -1;
+   }
+   return 1;
+}
+
+/*** BeginHeader mqtt_publish */
+int mqtt_publish(mqtt_broker_handle_t* broker, const char* topic,
+      const char* msg, uint8_t retain);
+/*** EndHeader  */
+/* START FUNCTION DESCRIPTION ********************************************
+mqtt_publish <MQTT.LIB>
+
+SYNTAX:
+   int mqtt_publish(mqtt_broker_handle_t* broker, const char* topic,
+         const char* msg, uint8_t retain);
+
+DESCRIPTION:
+   Publish a message on a topic.
+   This message will be published with 0 Qos level.
+
+PARAMETER1:
+   broker - Data structure that contains the connection information
+   with the broker.
+PARAMETER2:
+   topic - The topic name.
+PARAMETER3:
+   msg - The message.
+PARAMETER4:
+   retain - Enable or disable the Retain flag (values: 0 or 1).
+
+RETURN VALUE:
+    1 On success.
+    0 On connection error.
+   -1 On IO error.
+
+END DESCRIPTION **********************************************************/
+_mqtt_debug
+int mqtt_publish(mqtt_broker_handle_t* broker, const char* topic,
+      const char* msg, uint8_t retain) {
+   return mqtt_publish_with_qos(broker, topic, msg, retain, 0, NULL);
+}
+
+/*** BeginHeader mqtt_publish_with_qos */
+int mqtt_publish_with_qos(mqtt_broker_handle_t* broker, const char* topic,
+      const char* msg, uint8_t retain, uint8_t qos, uint16_t* message_id);
+/*** EndHeader  */
+/* START FUNCTION DESCRIPTION ********************************************
+mqtt_publish_with_qos <MQTT.LIB>
+
+SYNTAX:
+   int mqtt_publish_with_qos(mqtt_broker_handle_t* broker, const char* topic,
+         const char* msg, uint8_t retain, uint8_t qos, uint16_t* message_id);
+
+DESCRIPTION:
+   Publish a message on a topic.
+
+PARAMETER1:
+   broker - Data structure that contains the connection information
+   with the broker.
+PARAMETER2:
+   topic - The topic name.
+PARAMETER3:
+   msg - The message.
+PARAMETER4:
+   retain - Enable or disable the Retain flag (values: 0 or 1).
+PARAMETER5:
+   qos - Quality of Service (values: 0, 1 or 2).
+PARAMETER6:
+   message_id - Variable that will store the Message ID,
+                if the pointer is not NULL.
+
+RETURN VALUE:
+    1 On success.
+    0 On connection error.
+   -1 On IO error.
+
+END DESCRIPTION **********************************************************/
+_mqtt_debug
+int mqtt_publish_with_qos(mqtt_broker_handle_t* broker, const char* topic,
+      const char* msg, uint8_t retain, uint8_t qos, uint16_t* message_id) {
+   auto int rc;
+   auto uint16_t topiclen = strlen(topic);
+   auto uint16_t msglen = strlen(msg);
+
+   auto word varHeaderSize;
+   auto far uint8_t *var_header;
+
+   auto uint8_t fixedHeaderSize;
+   auto far uint8_t *fixed_header;
+
+   auto word packetSize;
+   auto far uint8_t *packet;
+
+   auto uint16_t remainLen;
+
+   auto uint8_t qos_flag = MQTT_QOS0_FLAG;
+   auto uint8_t qos_size = 0; // No QoS included
+
+   if(qos == 1) {
+      qos_size = 2; // 2 bytes for QoS
+      qos_flag = MQTT_QOS1_FLAG;
+   }
+   else if(qos == 2) {
+      qos_size = 2; // 2 bytes for QoS
+      qos_flag = MQTT_QOS2_FLAG;
+   }
+
+   // Variable header
+   varHeaderSize = topiclen+2+qos_size;
+   var_header = malloc(topiclen+2+qos_size); // Topic size (2 bytes), utf-encoded topic
+   _f_memset(var_header, 0, varHeaderSize);
+   var_header[0] = topiclen>>8;
+   var_header[1] = topiclen&0xFF;
+   _f_memcpy(var_header+2, topic, topiclen);
+   if(qos_size) {
+      var_header[topiclen+2] = broker->seq>>8;
+      var_header[topiclen+3] = broker->seq&0xFF;
+      if(message_id) { // Returning message id
+         *message_id = broker->seq;
+      }
+      broker->seq++;
+   }
+
+   // Fixed header
+   // the remaining length is one byte for messages up to 127 bytes, then two bytes after that
+   // actually, it can be up to 4 bytes but I'm making the assumption the embedded device will only
+   // need up to two bytes of length (handles up to 16,383 (almost 16k) sized message)
+   fixedHeaderSize = 2; // Default size = one byte Message Type + one byte Remaining Length
+   remainLen = varHeaderSize+msglen;
+   if (remainLen > 127) {
+      fixedHeaderSize++; // add an additional byte for Remaining Length
+   }
+   fixed_header = malloc(fixedHeaderSize);
+
+   // Message Type, DUP flag, QoS level, Retain
+   fixed_header[0] = MQTT_MSG_PUBLISH | qos_flag;
+   if(retain) {
+      fixed_header[0] |= MQTT_RETAIN_FLAG;
+   }
+   // Remaining Length
+   if (remainLen <= 127) {
+      fixed_header[1] = remainLen;
+   } else {
+      // first byte is remainder (mod) of 128, then set the MSB to indicate more bytes
+      fixed_header[1] = remainLen % 128;
+      fixed_header[1] = fixed_header[1] | 0x80;
+      // second byte is number of 128s
+      fixed_header[2] = remainLen / 128;
+   }
+
+   packetSize = fixedHeaderSize+varHeaderSize+msglen;
+   packet = malloc(packetSize);
+   _f_memset(packet, 0, packetSize);
+
+   _f_memcpy(packet, fixed_header, fixedHeaderSize);
+   free(fixed_header);
+
+   _f_memcpy(packet+fixedHeaderSize, var_header, varHeaderSize);
+   free(var_header);
+
+   _f_memcpy(packet+fixedHeaderSize+varHeaderSize, msg, msglen);
+
+   // Send the packet
+   if(broker->send(_SOCK_OF_MQTT(broker), packet, packetSize) < packetSize) {
+      rc = -1;
+   } else {
+      rc = 1;
+   }
+   free(packet);
+   return rc;
+}
+
+/*** BeginHeader mqtt_pubrel */
+int mqtt_pubrel(mqtt_broker_handle_t* broker, uint16_t message_id);
+/*** EndHeader  */
+/* START FUNCTION DESCRIPTION ********************************************
+mqtt_pubrel <MQTT.LIB>
+
+SYNTAX:
+   int mqtt_pubrel(mqtt_broker_handle_t* broker, uint16_t message_id);
+
+DESCRIPTION:
+   Send a PUBREL message. It's used for PUBLISH message with 2 QoS level.
+
+PARAMETER1:
+   broker - Data structure that contains the connection information
+   with the broker.
+PARAMETER2:
+   message_id - Message ID.
+
+   RETURN VALUE:
+    1 On success.
+    0 On connection error.
+   -1 On IO error.
+
+END DESCRIPTION **********************************************************/
+_mqtt_debug
+int mqtt_pubrel(mqtt_broker_handle_t* broker, uint16_t message_id) {
+   uint8_t packet[4] = {
+      MQTT_MSG_PUBREL | MQTT_QOS1_FLAG, // Type, DUP flag, QoS level, Retain.
+      0x02                              // Remaining length
+   };
+   packet[2] = message_id>>8;
+   packet[3] = message_id&0xFF;
+
+   // Send the packet
+   if(broker->send(_SOCK_OF_MQTT(broker), packet, sizeof(packet)) < sizeof(packet)) {
+      return -1;
+   }
+   return 1;
+}
+
+/*** BeginHeader mqtt_subscribe */
+int mqtt_subscribe(mqtt_broker_handle_t* broker, const char* topic,
+      uint16_t* message_id);
+/*** EndHeader  */
+/* START FUNCTION DESCRIPTION ********************************************
+mqtt_subscribe <MQTT.LIB>
+
+SYNTAX:
+   int mqtt_subscribe(mqtt_broker_handle_t* broker, const char* topic,
+         uint16_t* message_id);
+
+DESCRIPTION:
+   Subscribe to a topic.
+
+PARAMETER1:
+   broker - Data structure that contains the connection information
+   with the broker.
+PARAMETER2:
+   topic - The topic name.
+PARAMETER2:
+   message_id - Variable that will store the Message ID,
+                if the pointer is not NULL.
+
+   RETURN VALUE:
+    1 On success.
+    0 On connection error.
+   -1 On IO error.
+END DESCRIPTION **********************************************************/
+_mqtt_debug
+int mqtt_subscribe(mqtt_broker_handle_t* broker, const char* topic,
+      uint16_t* message_id)
+{
+   auto int rc;
+   auto uint16_t topiclen;
+   auto uint8_t var_header[2]; // Message ID
+   auto uint8_t fixed_header[2] = {
+      MQTT_MSG_SUBSCRIBE | MQTT_QOS1_FLAG // Message Type, DUP flag, QoS level, Retain
+   };
+
+   auto far uint8_t *utf_topic;
+
+   auto word packetSize;
+   auto far uint8_t *packet;
+
+   topiclen = strlen(topic);
+
+   // Variable header
+   var_header[0] = broker->seq>>8;
+   var_header[1] = broker->seq&0xFF;
+
+   if(message_id) { // Returning message id
+      *message_id = broker->seq;
+   }
+   broker->seq++;
+
+   // utf topic
+   utf_topic = malloc(topiclen+3); // Topic size (2 bytes), utf-encoded topic, QoS byte
+   _f_memset(utf_topic, 0, topiclen+3);
+   utf_topic[0] = topiclen>>8;
+   utf_topic[1] = topiclen&0xFF;
+   _f_memcpy(utf_topic+2, topic, topiclen);
+
+   // Fixed header
+   fixed_header[1] = sizeof(var_header)+topiclen+3;
+
+   packetSize = sizeof(fixed_header)+sizeof(var_header)+topiclen+3;
+   packet = malloc(packetSize);
+   _f_memset(packet, 0, packetSize);
+   _f_memcpy(packet, fixed_header, sizeof(fixed_header));
+   _f_memcpy(packet+sizeof(fixed_header), var_header, sizeof(var_header));
+   _f_memcpy(packet+sizeof(fixed_header)+sizeof(var_header), utf_topic, topiclen+3);
+   free(utf_topic);
+
+   // Send the packet
+   if(broker->send(_SOCK_OF_MQTT(broker), packet, packetSize) < packetSize) {
+      rc = -1;
+   } else {
+      rc = 1;
+   }
+   free(packet);
+   return rc;
+}
+
+/*** BeginHeader mqtt_unsubscribe */
+int mqtt_unsubscribe(mqtt_broker_handle_t* broker, const char* topic,
+      uint16_t* message_id);
+/*** EndHeader  */
+/* START FUNCTION DESCRIPTION ********************************************
+mqtt_unsubscribe <MQTT.LIB>
+
+SYNTAX:
+   int mqtt_unsubscribe(mqtt_broker_handle_t* broker, const char* topic,
+         uint16_t* message_id));
+
+DESCRIPTION:
+   Unsubscribe from a topic.
+
+PARAMETER1:
+   broker - Data structure that contains the connection information
+   with the broker.
+PARAMETER2:
+   topic - The topic name.
+PARAMETER2:
+   message_id - Variable that will store the Message ID,
+                if the pointer is not NULL.
+
+   RETURN VALUE:
+    1 On success.
+    0 On connection error.
+   -1 On IO error.
+END DESCRIPTION **********************************************************/
+_mqtt_debug
+int mqtt_unsubscribe(mqtt_broker_handle_t* broker, const char* topic,
+      uint16_t* message_id)
+{
+   auto int rc;
+   auto uint16_t topiclen;
+
+   auto uint8_t var_header[2]; // Message ID
+
+   auto far uint8_t *utf_topic;
+
+   auto uint8_t fixed_header[2] = {
+      MQTT_MSG_UNSUBSCRIBE | MQTT_QOS1_FLAG // Message Type, DUP flag, QoS level, Retain
+   };
+
+   auto word packetSize;
+   auto far uint8_t *packet;
+
+   topiclen = strlen(topic);
+   // Variable header
+   var_header[0] = broker->seq>>8;
+   var_header[1] = broker->seq&0xFF;
+   if(message_id) { // Returning message id
+      *message_id = broker->seq;
+   }
+   broker->seq++;
+
+   // utf topic
+   utf_topic = malloc(topiclen+2); // Topic size (2 bytes), utf-encoded topic
+   _f_memset(utf_topic, 0, topiclen+2);
+   utf_topic[0] = topiclen>>8;
+   utf_topic[1] = topiclen&0xFF;
+   _f_memcpy(utf_topic+2, topic, topiclen);
+
+   // Fixed header
+   fixed_header[1] = sizeof(var_header)+topiclen+2;
+
+   packetSize = sizeof(var_header)+sizeof(fixed_header)+topiclen+2;
+   packet = malloc(packetSize);
+   _f_memset(packet, 0, packetSize);
+   _f_memcpy(packet, fixed_header, sizeof(fixed_header));
+   _f_memcpy(packet+sizeof(fixed_header), var_header, sizeof(var_header));
+   _f_memcpy(packet+sizeof(fixed_header)+sizeof(var_header), utf_topic, topiclen+2);
+   free(utf_topic);
+
+   // Send the packet
+   if(broker->send(_SOCK_OF_MQTT(broker), packet, packetSize) < packetSize) {
+      rc = -1;
+   } else {
+      rc = 1;
+   }
+   free(packet);
+   return rc;
+}
+
 /*** BeginHeader send_packet */
 int send_packet(void* socket_info, far const void* buf, unsigned int count);
 /*** EndHeader  */
