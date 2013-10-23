@@ -5,7 +5,7 @@ Here is a nice tutorial: http://nthn.me/posts/2012/mqtt.html
 
 [http://nthn.me/about/ Nathan] was using Maverick Meerkat (Ubuntu 10.10) but [http://manpages.ubuntu.com/cgi-bin/search.py?q=mosquitto mosquitto], [http://manpages.ubuntu.com/cgi-bin/search.py?q=mosquitto_pub mosquitto_pub] and [http://manpages.ubuntu.com/cgi-bin/search.py?q=mosquitto_sub mosquitto_sub] are in the official repositories since Oneiric Ocelot (Ubuntu 11.10) so we no longer have to alter our sources.list, we can just install with:
 
-<code language="txt">
+<pre>
 $ sudo apt-get install mosquitto
 $ sudo apt-get install mosquitto-clients
-</code>
+</pre>
