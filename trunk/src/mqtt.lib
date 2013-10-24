@@ -999,7 +999,7 @@ int mqtt_publish_with_qos(mqtt_broker_handle_t* broker, const char* topic,
    _f_memcpy(packet+fixedHeaderSize+varHeaderSize, msg, msglen);
 
 #if MQTT_VERBOSE
-   printf("MQTT: Sending PUBLISH (%d bytes).\n", packetSize);
+   printf("MQTT: sending PUBLISH (%d bytes)\n", packetSize);
    #if MQTT_VERBOSE > 2
    mem_dump(packet, packetSize);
    printf("\n");
