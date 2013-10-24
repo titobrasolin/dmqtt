@@ -652,25 +652,21 @@ int mqtt_connect(mqtt_broker_handle_t* broker)
    auto uint16_t offset;
    auto uint16_t packetSize;
 
-   auto far uint8_t *fixed_header;
+   auto uint8_t fixed_header[5]; // Message type, plus max four bytes.
    auto far uint8_t *packet;
 
    clientidlen = strlen(broker->clientid);
-   usernamelen = strlen(broker->username);
-   passwordlen = strlen(broker->password);
    payload_len = clientidlen + 2;
 
-   // Preparing the flags.
-   if(usernamelen) {
+   if (usernamelen = strlen(broker->username)) {
       payload_len += usernamelen + 2;
       flags |= MQTT_USERNAME_FLAG;
-   }
-   if(passwordlen) {
-      payload_len += passwordlen + 2;
-      flags |= MQTT_PASSWORD_FLAG;
-   }
-   if(broker->clean_session) {
-      flags |= MQTT_CLEAN_SESSION;
+      if (passwordlen = strlen(broker->password)) {
+         payload_len += passwordlen + 2;
+         flags |= MQTT_PASSWORD_FLAG;
+      }
+   } else {
+      passwordlen = 0; // Because a password without a user name is not valid.
    }
 
    // Variable header.
@@ -678,38 +674,21 @@ int mqtt_connect(mqtt_broker_handle_t* broker)
    var_header[10] = broker->alive>>8;
    var_header[11] = broker->alive&0xFF;
 
-   // Fixed header.
-   fixedHeaderSize = 2;  // Default size = one byte Message Type
-                         // + one byte Remaining Length.
-   remainLen = sizeof(var_header)+payload_len;
-   if (remainLen > 127) {
-      fixedHeaderSize++; // add an additional byte for Remaining Length.
-   }
-   fixed_header = malloc(fixedHeaderSize);
+   remainLen = sizeof(var_header) + payload_len;
 
-   // Message Type
+   // Fixed header: message type + remaining length.
    fixed_header[0] = MQTT_MSG_CONNECT;
+   fixedHeaderSize = 1 + mqtt_encode_len(&fixed_header[1], remainLen);
 
-   // Remaining Length
-   if (remainLen <= 127) {
-      fixed_header[1] = remainLen;
-   } else {
-        // first byte is remainder (mod) of 128, then set the MSB to indicate more bytes
-        fixed_header[1] = remainLen % 128;
-        fixed_header[1] = fixed_header[1] | 0x80;
-        // second byte is number of 128s
-        fixed_header[2] = remainLen / 128;
-    }
+   packetSize = fixedHeaderSize + remainLen;
+   packet =  malloc(packetSize); // TODO: compute max packet size and allocate on stack?
 
-   offset = 0;
-   packetSize = fixedHeaderSize + sizeof(var_header) + payload_len;
-   packet =  malloc(packetSize);
-   _f_memset(packet, 0, packetSize);
    _f_memcpy(packet, fixed_header, fixedHeaderSize);
-   free(fixed_header);
-   offset += fixedHeaderSize;
+   offset = fixedHeaderSize;
+
    _f_memcpy(packet+offset, var_header, sizeof(var_header));
    offset += sizeof(var_header);
+
    // Client ID - UTF encoded
    packet[offset++] = clientidlen>>8;
    packet[offset++] = clientidlen&0xFF;
@@ -722,15 +701,15 @@ int mqtt_connect(mqtt_broker_handle_t* broker)
       packet[offset++] = usernamelen&0xFF;
       _f_memcpy(packet+offset, broker->username, usernamelen);
       offset += usernamelen;
+      if(passwordlen) {
+         // Password - UTF encoded
+         packet[offset++] = passwordlen>>8;
+         packet[offset++] = passwordlen&0xFF;
+         _f_memcpy(packet+offset, broker->password, passwordlen);
+         offset += passwordlen;
+      }
    }
 
-   if(passwordlen) {
-      // Password - UTF encoded
-      packet[offset++] = passwordlen>>8;
-      packet[offset++] = passwordlen&0xFF;
-      _f_memcpy(packet+offset, broker->password, passwordlen);
-      offset += passwordlen;
-   }
 #if MQTT_VERBOSE
    printf("MQTT: Sending CONNECT (%d bytes).\n", packetSize);
    #if MQTT_VERBOSE > 2
