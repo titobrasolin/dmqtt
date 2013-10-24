@@ -830,6 +830,19 @@ DESCRIPTION:
    Publish a message on a topic.
    This message will be published with 0 Qos level.
 
+   NOTE: The response to a PUBLISH message depends on the QoS level.
+         The table below shows the expected responses.
+
+         +-----------+-------------------+
+         | QoS Level | Expected response |
+         +-----------+-------------------+
+         | QoS 0     | None              |
+         +-----------+-------------------+
+         | QoS 1     | PUBACK            |
+         +-----------+-------------------+
+         | QoS 2     | PUBREC            |
+         +-----------+-------------------+
+
 PARAMETER1:
    broker - Data structure that contains the connection information
    with the broker.
