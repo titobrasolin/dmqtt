@@ -201,6 +201,44 @@ END DESCRIPTION **********************************************************/
 #define MQTTParseMessageRetain(buffer) ( *buffer & 0x01 )
 /*** EndHeader */
 
+/*** BeginHeader mqtt_encode_len */
+int mqtt_encode_len(char* buf, int len);
+/*** EndHeader  */
+/* START FUNCTION DESCRIPTION ********************************************
+mqtt_encode_len <MQTT.LIB>
+
+SYNTAX:
+   int mqtt_encode_len(char* buf, int len);
+
+DESCRIPTION:
+   Encodes the message length according to the MQTT algorithm.
+
+PARAMETER1:
+   buf - The buffer into which the encoded data is written.
+PARAMETER2:
+   len - The length to be encoded.
+
+RETURN VALUE:
+   Number of bytes written to buffer.
+
+END DESCRIPTION **********************************************************/
+_mqtt_debug
+int mqtt_encode_len(char* buf, int len)
+{
+   int rc = 0;
+   char d;
+
+   do {
+      d = len % 128;
+      if (len /= 128) {
+         d |= 0x80;
+      }
+      buf[rc++] = d;
+   } while (len);
+
+   return rc;
+}
+
 /*** BeginHeader mqtt_num_rem_len_bytes */
 uint8_t mqtt_num_rem_len_bytes(const uint8_t* buf);
 /*** EndHeader  */
