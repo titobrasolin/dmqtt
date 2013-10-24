@@ -29,7 +29,7 @@ The following libraries must be #use'd in this order:
 
 END DESCRIPTION **********************************************************/
 
-/*** BeginHeader */
+/*** BeginHeader mqtt_state */
 #ifndef __MQTT_LIB
 #define __MQTT_LIB
 
@@ -114,6 +114,12 @@ typedef struct {
    uint16_t alive;
 } mqtt_broker_handle_t;
 
+extern mqtt_broker_handle_t mqtt_state;
+/*** EndHeader */
+
+mqtt_broker_handle_t mqtt_state;
+
+/*** BeginHeader */
 /* START FUNCTION DESCRIPTION ********************************************
 MQTTParseMessageType <MQTT.LIB>
 
