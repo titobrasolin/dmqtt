@@ -201,6 +201,25 @@ END DESCRIPTION **********************************************************/
 #define MQTTParseMessageRetain(buffer) ( *buffer & 0x01 )
 /*** EndHeader */
 
+/*** BeginHeader mqtt_write_string */
+uint16_t mqtt_write_string(char* string, far uint8_t* buf, uint16_t pos);
+/*** EndHeader  */
+/* START FUNCTION DESCRIPTION ********************************************
+mqtt_write_string <MQTT.LIB>
+END DESCRIPTION **********************************************************/
+uint16_t mqtt_write_string(char* string, far uint8_t* buf, uint16_t pos) {
+   char* idp = string;
+   uint16_t i = 0;
+   pos += 2;
+   while (*idp) {
+      buf[pos++] = *idp++;
+      i++;
+   }
+   buf[pos-i-2] = (i >> 8);
+   buf[pos-i-1] = (i & 0xFF);
+   return pos;
+}
+
 /*** BeginHeader mqtt_encode_len */
 int mqtt_encode_len(char* buf, int len);
 /*** EndHeader  */
@@ -680,6 +699,7 @@ int mqtt_connect(mqtt_broker_handle_t* broker)
    fixed_header[0] = MQTT_MSG_CONNECT;
    fixedHeaderSize = 1 + mqtt_encode_len(&fixed_header[1], remainLen);
 
+   // Now build the packet.
    packetSize = fixedHeaderSize + remainLen;
    packet =  malloc(packetSize); // TODO: compute max packet size and allocate on stack?
 
@@ -690,28 +710,18 @@ int mqtt_connect(mqtt_broker_handle_t* broker)
    offset += sizeof(var_header);
 
    // Client ID - UTF encoded
-   packet[offset++] = clientidlen>>8;
-   packet[offset++] = clientidlen&0xFF;
-   _f_memcpy(packet+offset, broker->clientid, clientidlen);
-   offset += clientidlen;
-
+   offset = mqtt_write_string(broker->clientid, packet, offset);
    if(usernamelen) {
       // Username - UTF encoded
-      packet[offset++] = usernamelen>>8;
-      packet[offset++] = usernamelen&0xFF;
-      _f_memcpy(packet+offset, broker->username, usernamelen);
-      offset += usernamelen;
+      offset = mqtt_write_string(broker->username, packet, offset);
       if(passwordlen) {
          // Password - UTF encoded
-         packet[offset++] = passwordlen>>8;
-         packet[offset++] = passwordlen&0xFF;
-         _f_memcpy(packet+offset, broker->password, passwordlen);
-         offset += passwordlen;
+         mqtt_write_string(broker->password, packet, offset);
       }
    }
 
 #if MQTT_VERBOSE
-   printf("MQTT: Sending CONNECT (%d bytes).\n", packetSize);
+   printf("MQTT: sending CONNECT (%d bytes)\n", packetSize);
    #if MQTT_VERBOSE > 2
    mem_dump(packet, packetSize);
    printf("\n");
