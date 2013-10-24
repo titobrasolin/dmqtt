@@ -97,7 +97,7 @@ END DESCRIPTION **********************************************************/
 typedef struct {
    void* socket_info; // Currently pointing to tcp_Socket instance ('s') below.
    tcp_Socket s;
-   int (*send)(void* socket_info, far const void* buf, unsigned int count);
+   int (*send)(void* socket_info, const void far *buf, int count);
    char host[DNS_MAX_NAME]; // Null-terminated dotted ip address or host name.
    word port;
    // Connection info
@@ -486,7 +486,7 @@ PARAMETER2:
 END DESCRIPTION **********************************************************/
 _mqtt_debug
 void mqtt_init(mqtt_broker_handle_t* broker, const char* clientid) {
-   memset(broker, 0, sizeof(broker));
+   memset(broker, 0, sizeof(*broker));
    // Socket info.
    broker->socket_info = _TCP_SOCK_OF_MQTT(broker);
    // Connection options
@@ -504,9 +504,7 @@ void mqtt_init(mqtt_broker_handle_t* broker, const char* clientid) {
          );
 #if MQTT_VERBOSE
       printf("MQTT: My client ID is: %s\n", broker->clientid);
-      mem_dump(edp_globals.device_id, 16);
 #endif
-      strcpy(broker->clientid, "emqtt");
    }
    // Will topic
    broker->clean_session = 1;
@@ -695,7 +693,13 @@ int mqtt_connect(mqtt_broker_handle_t* broker)
       _f_memcpy(packet+offset, broker->password, passwordlen);
       offset += passwordlen;
    }
-
+#if MQTT_VERBOSE
+   printf("MQTT: Sending CONNECT (%d bytes).\n", packetSize);
+   #if MQTT_VERBOSE > 2
+   mem_dump(packet, packetSize);
+   printf("\n");
+   #endif
+#endif
    // Send the packet
    if(broker->send(_SOCK_OF_MQTT(broker), packet, packetSize) < packetSize) {
       rc = -1;
@@ -935,6 +939,13 @@ int mqtt_publish_with_qos(mqtt_broker_handle_t* broker, const char* topic,
 
    _f_memcpy(packet+fixedHeaderSize+varHeaderSize, msg, msglen);
 
+#if MQTT_VERBOSE
+   printf("MQTT: Sending PUBLISH (%d bytes).\n", packetSize);
+   #if MQTT_VERBOSE > 2
+   mem_dump(packet, packetSize);
+   printf("\n");
+   #endif
+#endif
    // Send the packet
    if(broker->send(_SOCK_OF_MQTT(broker), packet, packetSize) < packetSize) {
       rc = -1;
@@ -1152,15 +1163,16 @@ int mqtt_unsubscribe(mqtt_broker_handle_t* broker, const char* topic,
 }
 
 /*** BeginHeader send_packet */
-int send_packet(void* socket_info, far const void* buf, unsigned int count);
+int send_packet(void* socket_info, const void far *buf, int count);
 /*** EndHeader  */
 /* START FUNCTION DESCRIPTION ********************************************
 send_packet <MQTT.LIB>
 END DESCRIPTION **********************************************************/
 _mqtt_debug
-int send_packet(void* socket_info, far const void* buf, unsigned int count) {
-   int fd = *((int*)socket_info);
-   return send(fd, buf, count, 0);
+int send_packet(void* socket_info, const void far *buf, int count) {
+   // Note that function sock_write BUSY WAITS until either the buffer is
+   // completely written or a socket error occurs.
+   return sock_write(socket_info, buf, count);
 }
 
 /*** BeginHeader init_socket */
@@ -1209,51 +1221,28 @@ int close_socket(mqtt_broker_handle_t* broker) {
 }
 
 /*** BeginHeader read_packet */
-int read_packet(int timeout);
+int read_packet(void* socket_info, const void far *buf, int count);
 /*** EndHeader  */
 /* START FUNCTION DESCRIPTION ********************************************
 read_packet <MQTT.LIB>
 END DESCRIPTION **********************************************************/
-int read_packet(int timeout) {
-   if(timeout > 0) {
-      fd_set readfds;
-      struct timeval tmv;
+int read_packet(void* socket_info, const void far *buf, int count) {
+   auto int packet_length;
+   far auto uint8_t *packet_buffer;
 
-      // Initialize the file descriptor set
-      FD_ZERO (&readfds);
-      FD_SET (socket_id, &readfds);
-
-      // Initialize the timeout data structure
-      tmv.tv_sec = timeout;
-      tmv.tv_usec = 0;
-
-      // select returns 0 if timeout, 1 if input available, -1 if error
-      if(select(1, &readfds, NULL, NULL, &tmv)) {
-         return -2;
-      }
-   }
-
-   int total_bytes = 0, bytes_rcvd, packet_length;
-   memset(packet_buffer, 0, sizeof(packet_buffer));
+   packet_buffer = (far uint8_t *)buf;
+   // TODO: Error if count < 2.
 
    // Reading fixed header
-   while(total_bytes < 2) {
-      if((bytes_rcvd = recv(socket_id, (packet_buffer+total_bytes), RCVBUFSIZE - total_bytes, 0)) <= 0) {
-         return -1;
-      }
-      total_bytes += bytes_rcvd; // Keep tally of total bytes
+   if (sock_read(socket_info, packet_buffer, 2) != 2) {
+      return -1;
    }
-
    packet_length = packet_buffer[1] + 2; // Remaining length + fixed header length
 
    // Reading the packet
-   while(total_bytes < packet_length) {
-      if((bytes_rcvd = recv(socket_id, (packet_buffer+total_bytes), RCVBUFSIZE - total_bytes, 0)) <= 0) {
-         return -1;
-      }
-      total_bytes += bytes_rcvd; // Keep tally of total bytes
+   if (sock_read(socket_info, packet_buffer+2, count-2) < 0) {
+     return -1;
    }
-
    return packet_length;
 }
 
