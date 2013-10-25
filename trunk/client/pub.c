@@ -1,13 +1,10 @@
-#define TCPCONFIG 1
-
-// #define DCRTCP_VERBOSE
+#define DCRTCP_VERBOSE
 // #define TCP_VERBOSE_PENDING
 // #define TCP_VERBOSE_DUPACK
 
 #define MQTT_DEBUG
 #define MQTT_VERBOSE 3
 
-#use dcrtcp.lib
 #use mqtt.lib
 
 #define M2MIO_USERNAME         ""
@@ -47,10 +44,7 @@ void main() {
       fprintf(stderr, "CONNACK failed!\n");
       exit(EXIT_FAILURE);
    }
-
-   // >>>>> CONNECT
-   mqtt_connect(&broker);
-
+   printf("MQTT: Received CONNACK\n");
    // >>>>> PUBLISH QoS 0
    printf("Publish: QoS 0\n");
    mqtt_publish(&broker, "hello/world", "Hello World (QoS 0)", 0);
@@ -62,16 +56,16 @@ void main() {
    packet_length = read_packet(broker.socket_info, packet_buffer, sizeof(packet_buffer));
    if(packet_length < 0) {
       fprintf(stderr, "Error(%d) on read packet!\n", packet_length);
-      // exit(EXIT_FAILURE);
+      exit(EXIT_FAILURE);
    }
    if(MQTTParseMessageType(packet_buffer) != MQTT_MSG_PUBACK) {
       fprintf(stderr, "PUBACK expected!\n");
-      // exit(EXIT_FAILURE);
+      exit(EXIT_FAILURE);
    }
    msg_id_rcv = mqtt_parse_msg_id(packet_buffer);
    if(msg_id != msg_id_rcv) {
       fprintf(stderr, "%d message id was expected, but %d message id was found!\n", msg_id, msg_id_rcv);
-      // exit(EXIT_FAILURE);
+      exit(EXIT_FAILURE);
    }
 
    while (1) {

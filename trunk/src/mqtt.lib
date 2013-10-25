@@ -22,9 +22,6 @@ DESCRIPTION: MQTT Client Library written in Dynamic C for Rabbit
 
 The following libraries must be #use'd in this order:
 #use ucos2.lib  // Optional.
-#use dcrtcp.lib
-#use modbus_slave.lib // Optional.
-#use modbus_slave_tcp.lib // Optional.
 #use mqtt.lib
 
 END DESCRIPTION **********************************************************/
@@ -32,6 +29,13 @@ END DESCRIPTION **********************************************************/
 /*** BeginHeader mqtt_state */
 #ifndef __MQTT_LIB
 #define __MQTT_LIB
+
+#ifndef TCPCONFIG
+   #define TCPCONFIG 1
+#endif
+
+// Required to properly support socket half-close
+#define TCP_NO_CLOSE_ON_LAST_READ
 
 #ifdef MQTT_DEBUG
    #define _mqtt_debug __debug
@@ -94,6 +98,7 @@ END DESCRIPTION **********************************************************/
 #define _TCP_SOCK_OF_MQTT(mqtt) (&(mqtt)->s)
 #define _SOCK_OF_MQTT(mqtt) _TCP_SOCK(mqtt->socket_info)
 
+#use "dcrtcp.lib"
 typedef struct {
    void* socket_info; // Currently pointing to tcp_Socket instance ('s') below.
    tcp_Socket s;
@@ -1232,9 +1237,6 @@ int send_packet(void* socket_info, const void far *buf, int count) {
    auto int bytes_written;
    // Note that function sock_write BUSY WAITS until either the buffer is
    // completely written or a socket error occurs.
-#if MQTT_VERBOSE
-   printf("MQTT: sending packet, socket state is \"%s\"\n", sockstate(socket_info));
-#endif
    sock_flushnext(socket_info);
    bytes_written = sock_write(socket_info, buf, count);
    if (bytes_written == count) {
@@ -1302,25 +1304,17 @@ int read_packet(void* socket_info, const void far *buf, int count) {
    packet_buffer = (far uint8_t *)buf;
    // TODO: Error if count < 2.
 
-#if MQTT_VERBOSE
-   printf("MQTT: reading fixed header, socket state is \"%s\"\n", sockstate(socket_info));
-#endif
    // Reading fixed header
    if (sock_read(socket_info, packet_buffer, 2) != 2) {
       return -1;
    }
    packet_length = packet_buffer[1] + 2; // Remaining length + fixed header length
 
-#if MQTT_VERBOSE
-   printf("MQTT: reading packet, socket state is \"%s\"\n", sockstate(socket_info));
-#endif
    // Reading the packet
    if (sock_read(socket_info, packet_buffer+2, count-2) < 0) {
      return -1;
    }
-#if MQTT_VERBOSE
-   printf("MQTT: packet has been read, socket state is \"%s\"\n", sockstate(socket_info));
-#endif
+
    return packet_length;
 }
 
