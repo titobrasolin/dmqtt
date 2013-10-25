@@ -1,3 +1,4 @@
+#define DCRTCP_DEBUG
 #define DCRTCP_VERBOSE
 // #define TCP_VERBOSE_PENDING
 // #define TCP_VERBOSE_DUPACK
@@ -12,7 +13,7 @@
 #define M2MIO_DOMAIN           ""
 #define M2MIO_DEVICE_TYPE      ""
 #define M2MIO_DEVICE_ID        ""
-#define M2MIO_BROKER_HOSTNAME  "192.168.0.36"
+#define M2MIO_BROKER_HOSTNAME  "192.168.0.40"
 #define M2MIO_BROKER_PORT      1883
 
 #define RCVBUFSIZE 1024

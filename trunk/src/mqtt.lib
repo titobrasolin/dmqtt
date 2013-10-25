@@ -1311,7 +1311,7 @@ int read_packet(void* socket_info, const void far *buf, int count) {
    packet_length = packet_buffer[1] + 2; // Remaining length + fixed header length
 
    // Reading the packet
-   if (sock_read(socket_info, packet_buffer+2, count-2) < 0) {
+   if (sock_read(socket_info, packet_buffer+2, packet_length-2) < 0) {
      return -1;
    }
 
