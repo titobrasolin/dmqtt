@@ -1,7 +1,7 @@
 # dmqtt
-_Automatically exported from code.google.com/p/dmqtt_
+*Automatically exported from code.google.com/p/dmqtt*
 
-*Note:* not yet ready for production!
+**Note:** not yet ready for production!
 
 [What is MQTT?](http://mqtt.org/faq) MQTT stands for MQ Telemetry Transport.
 
